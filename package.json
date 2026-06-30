@@ -1,0 +1,12 @@
+{
+  "name": "botify-x-bootstrap",
+  "version": "1.0.0",
+  "description": "BOTIFY-X Bootstrapper — starts and watchdogs the core bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
