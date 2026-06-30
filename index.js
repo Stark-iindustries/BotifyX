@@ -3,20 +3,50 @@
 /**
  * BOTIFY-X Bootstrap
  * ---------------------------------
- * Starts botify.js from the core directory with auto-restart on crash.
- * Railway / Heroku / Render friendly — exits with 0 on graceful shutdown,
- * restarts on non-zero exits up to MAX_RETRIES times.
+ * On every start:
+ *   1. Downloads core if not present (3 fallback methods).
+ *   2. Checks GitHub for a newer version — downloads + updates if found.
+ *   3. Spawns botify.js with auto-restart on crash.
+ *
+ * Supported platforms: Railway, Heroku, Render, Koyeb, Fly.io,
+ *                      Pterodactyl, Termux, Windows, macOS, Linux.
  */
 
-const { spawn } = require('child_process');
-const path      = require('path');
-const fs        = require('fs');
+const { spawn, spawnSync } = require('child_process');
+const path   = require('path');
+const fs     = require('fs');
+const https  = require('https');
+const http   = require('http');
+const AdmZip = require('adm-zip');
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-const CORE_DIR   = path.resolve(__dirname, '..', 'core');
-const ENTRY      = path.join(CORE_DIR, 'botify.js');
+// ─── Paths ────────────────────────────────────────────────────────────────────
+const CORE_DIR = path.resolve(__dirname, '..', 'core');
+const ENTRY    = path.join(CORE_DIR, 'botify.js');
+const CORE_PKG = path.join(CORE_DIR, 'package.json');
+
+// ─── Watchdog config ──────────────────────────────────────────────────────────
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || '5000', 10); // ms
+
+// ─── Download sources ─────────────────────────────────────────────────────────
+//
+// METHOD 1 — Primary GitHub repo zip (auto-set from your repo)
+const METHOD1_GITHUB_URL = 'https://github.com/Stark-iindustries/Core-botifyX/archive/refs/heads/main.zip';
+//
+// METHOD 2 — Hosted core zip (your own server, CDN, etc.)
+// Replace 'YOUR_URL_HERE' with a direct URL to a hosted core zip, or leave as-is to skip.
+const METHOD2_HOSTED_URL = 'YOUR_URL_HERE';
+//
+// METHOD 3 — Backup GitHub release zip (second repo / mirror)
+// Replace 'YOUR_URL_HERE' with a backup GitHub zip URL, or leave as-is to skip.
+const METHOD3_BACKUP_GITHUB_URL = 'YOUR_URL_HERE';
+
+// ─── GitHub repo for update version checks ────────────────────────────────────
+// File: bootstrap/index.js  Line 49
+// Replace 'YOUR_GITHUB_USERNAME/YOUR_REPO_NAME' with your GitHub repo path.
+// Example: 'MrStark/botify-x'
+// Leave as-is to skip update checks.
+const GITHUB_REPO = 'Stark-iindustries/Core-botifyX';
 
 // ─── Platform detection ───────────────────────────────────────────────────────
 function detectPlatform() {
@@ -26,6 +56,10 @@ function detectPlatform() {
     if (env.RENDER)         return 'Render';
     if (env.KOYEB_APP_NAME) return 'Koyeb';
     if (env.FLY_APP_NAME)   return 'Fly.io';
+    if (env.P_SERVER_UUID || env.PTERODACTYL_UUID ||
+        (env.HOSTNAME && env.HOSTNAME.startsWith('pterodactyl'))) return 'Pterodactyl';
+    if (env.TERMUX_VERSION ||
+        (env.PREFIX && env.SHELL && env.SHELL.includes('com.termux'))) return 'Termux';
     return 'Local';
 }
 
@@ -38,24 +72,180 @@ function banner() {
     console.log('╚══════════════════════════════════╝');
     console.log(`[BOTIFY-X] Platform : ${detectPlatform()}`);
     console.log(`[BOTIFY-X] Node.js  : ${process.version}`);
-    console.log(`[BOTIFY-X] Entry    : ${ENTRY}`);
     console.log('');
 }
 
-// ─── Validate ─────────────────────────────────────────────────────────────────
-if (!fs.existsSync(ENTRY)) {
-    console.error(`[BOTIFY-X] ERROR: Core entry not found at ${ENTRY}`);
-    console.error('[BOTIFY-X] Make sure the core/ directory is present.');
-    process.exit(1);
+// ─── HTTP/HTTPS downloader (follows redirects) ────────────────────────────────
+function downloadBuffer(url, redirects = 0) {
+    if (redirects > 5) return Promise.reject(new Error('Too many redirects'));
+    return new Promise((resolve, reject) => {
+        const client  = url.startsWith('https') ? https : http;
+        const request = client.get(url, { timeout: 60000 }, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return downloadBuffer(res.headers.location, redirects + 1).then(resolve).catch(reject);
+            }
+            if (res.statusCode !== 200) {
+                return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+            }
+            const chunks = [];
+            res.on('data',  chunk => chunks.push(chunk));
+            res.on('end',   () => resolve(Buffer.concat(chunks)));
+            res.on('error', reject);
+        });
+        request.on('error',   reject);
+        request.on('timeout', () => { request.destroy(); reject(new Error(`Timeout: ${url}`)); });
+    });
+}
+
+// ─── Extract zip into CORE_DIR ────────────────────────────────────────────────
+function extractZip(buffer, label) {
+    console.log(`[BOTIFY-X] Extracting from ${label}…`);
+    const zip     = new AdmZip(buffer);
+    const entries = zip.getEntries();
+
+    // Strip top-level folder wrapper (GitHub zips wrap in reponame-branch/)
+    let prefix = '';
+    if (entries.length > 0) {
+        const first  = entries[0].entryName;
+        const topDir = first.split('/')[0];
+        if (entries.every(e => e.entryName.startsWith(topDir + '/'))) {
+            prefix = topDir + '/';
+        }
+    }
+
+    fs.mkdirSync(CORE_DIR, { recursive: true });
+    for (const entry of entries) {
+        if (entry.isDirectory) continue;
+        const relative = prefix ? entry.entryName.slice(prefix.length) : entry.entryName;
+        if (!relative) continue;
+        const dest = path.join(CORE_DIR, relative);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+    }
+    console.log(`[BOTIFY-X] ✅ Extracted from ${label}`);
+}
+
+// ─── Try all 3 methods in order ───────────────────────────────────────────────
+async function downloadCore() {
+    const methods = [
+        { label: 'Method 1 (Primary GitHub)', url: METHOD1_GITHUB_URL },
+        { label: 'Method 2 (Hosted URL)',      url: METHOD2_HOSTED_URL },
+        { label: 'Method 3 (Backup GitHub)',   url: METHOD3_BACKUP_GITHUB_URL },
+    ];
+
+    for (const { label, url } of methods) {
+        if (!url || url === 'YOUR_URL_HERE') {
+            console.warn(`[BOTIFY-X] ⚠️  ${label} — URL not configured, skipping.`);
+            continue;
+        }
+        try {
+            console.log(`[BOTIFY-X] Trying ${label}…`);
+            const buffer = await downloadBuffer(url);
+            extractZip(buffer, label);
+            return true;
+        } catch (err) {
+            console.error(`[BOTIFY-X] ❌ ${label} failed: ${err.message}`);
+        }
+    }
+    return false;
+}
+
+// ─── Semver compare (returns true if latestStr > currentStr) ─────────────────
+function isNewer(latestStr, currentStr) {
+    const parse = (s) => (s || '0').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+    const l = parse(latestStr);
+    const c = parse(currentStr);
+    for (let i = 0; i < 3; i++) {
+        if ((l[i] || 0) > (c[i] || 0)) return true;
+        if ((l[i] || 0) < (c[i] || 0)) return false;
+    }
+    return false;
+}
+
+// ─── Check GitHub for a newer version ────────────────────────────────────────
+async function checkAndUpdate() {
+    if (!GITHUB_REPO || GITHUB_REPO === 'YOUR_GITHUB_USERNAME/YOUR_REPO_NAME') {
+        console.log('[BOTIFY-X] ℹ️  GITHUB_REPO not set — update check skipped.');
+        return;
+    }
+
+    let currentVersion = '0.0.0';
+    try {
+        const pkg = JSON.parse(fs.readFileSync(CORE_PKG, 'utf8'));
+        currentVersion = pkg.version || '0.0.0';
+    } catch (_) {}
+
+    console.log(`[BOTIFY-X] Checking for updates (current: v${currentVersion})…`);
+
+    try {
+        const apiUrl  = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+        const buffer  = await downloadBuffer(apiUrl);
+        const release = JSON.parse(buffer.toString('utf8'));
+        const latest  = (release.tag_name || '').replace(/^v/, '');
+
+        if (!latest) {
+            console.log('[BOTIFY-X] ℹ️  No release found on GitHub — skipping update.');
+            return;
+        }
+
+        if (!isNewer(latest, currentVersion)) {
+            console.log(`[BOTIFY-X] ✅ Already on latest version (v${currentVersion}).`);
+            return;
+        }
+
+        console.log(`[BOTIFY-X] 🆙 New version available: v${latest}. Updating…`);
+        const downloaded = await downloadCore();
+
+        if (!downloaded) {
+            console.error('[BOTIFY-X] ❌ Update download failed — running existing version.');
+            return;
+        }
+
+        // Re-install dependencies after update
+        console.log('[BOTIFY-X] Running npm install for updated core…');
+        const result = spawnSync(
+            process.platform === 'win32' ? 'npm.cmd' : 'npm',
+            ['install', '--omit=dev'],
+            { cwd: CORE_DIR, stdio: 'inherit' }
+        );
+        if (result.status !== 0) {
+            console.warn('[BOTIFY-X] ⚠️  npm install exited with errors — continuing anyway.');
+        } else {
+            console.log('[BOTIFY-X] ✅ npm install complete.');
+        }
+
+        console.log(`[BOTIFY-X] ✅ Updated to v${latest} successfully.`);
+    } catch (err) {
+        console.error(`[BOTIFY-X] ⚠️  Update check error: ${err.message} — continuing with current version.`);
+    }
+}
+
+// ─── npm install helper (first-time setup) ────────────────────────────────────
+function runNpmInstall() {
+    console.log('[BOTIFY-X] Installing core dependencies…');
+    const result = spawnSync(
+        process.platform === 'win32' ? 'npm.cmd' : 'npm',
+        ['install', '--omit=dev'],
+        { cwd: CORE_DIR, stdio: 'inherit' }
+    );
+    if (result.status !== 0) {
+        console.warn('[BOTIFY-X] ⚠️  npm install exited with errors.');
+    } else {
+        console.log('[BOTIFY-X] ✅ Dependencies installed.');
+    }
 }
 
 // ─── Launch loop ──────────────────────────────────────────────────────────────
-banner();
-
 let attempts = 0;
 
 function launch() {
+    if (!fs.existsSync(ENTRY)) {
+        console.error(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`);
+        process.exit(1);
+    }
+
     console.log(`[BOTIFY-X] Starting botify.js (attempt ${attempts + 1})…`);
+    console.log(`[BOTIFY-X] Entry : ${ENTRY}`);
 
     const child = spawn(process.execPath, [ENTRY], {
         cwd:   CORE_DIR,
@@ -80,9 +270,28 @@ function launch() {
         setTimeout(launch, delay);
     });
 
-    // Graceful shutdown
     process.once('SIGINT',  () => { child.kill('SIGINT');  });
     process.once('SIGTERM', () => { child.kill('SIGTERM'); });
 }
 
-launch();
+// ─── Entry point ──────────────────────────────────────────────────────────────
+(async () => {
+    banner();
+
+    // Step 1: download core if missing
+    if (!fs.existsSync(ENTRY)) {
+        console.log('[BOTIFY-X] Core not found locally. Downloading…');
+        const ok = await downloadCore();
+        if (!ok) {
+            console.error('[BOTIFY-X] ❌ All download methods failed. Cannot continue.');
+            process.exit(1);
+        }
+        runNpmInstall();
+    } else {
+        // Step 2: check for updates on every restart
+        await checkAndUpdate();
+    }
+
+    // Step 3: launch
+    launch();
+})();
