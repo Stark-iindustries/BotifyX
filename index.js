@@ -223,39 +223,33 @@ async function checkAndUpdate() {
 }
 
 // ─── npm install helper ────────────────────────────────────────────────────────
-// On Railway / Heroku / Render: all core deps are merged into bootstrap's
-// package.json so the platform installs them at BUILD time. Node's module
-// resolution walks up from /app/core → /app/node_modules automatically.
-//
-// On local / Termux / Pterodactyl: node_modules won't exist yet, so we
-// run npm install as a one-time setup only when node_modules is missing.
-function runNpmInstallIfNeeded() {
+// Runs npm install in the core directory.
+// Works on all platforms: Railway, Heroku, Render, Koyeb, Fly.io,
+//                         Pterodactyl, Termux, Windows, macOS, Linux.
+// Skipped on restart if node_modules already exists (already installed).
+function runNpmInstall() {
     const nmDir = path.join(CORE_DIR, 'node_modules');
-    const parentNm = path.join(path.dirname(CORE_DIR), 'node_modules');
-
-    // Skip if either core's own node_modules or parent node_modules exists
-    if (fs.existsSync(nmDir) || fs.existsSync(parentNm)) {
-        console.log('[BOTIFY-X] node_modules found — skipping npm install.');
+    if (fs.existsSync(nmDir)) {
+        console.log('[BOTIFY-X] node_modules already present — skipping install.');
         return;
     }
 
-    console.log('[BOTIFY-X] No node_modules found. Running npm install…');
+    console.log('[BOTIFY-X] Installing core dependencies (first run — may take a minute)…');
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
+    // --omit=dev works on npm 7+; fall back to --production for older npm
     let result = spawnSync(npm, ['install', '--omit=dev'], {
-        cwd: CORE_DIR, stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'production' },
+        cwd: CORE_DIR, stdio: 'inherit', env: process.env,
     });
     if (result.status !== 0) {
         result = spawnSync(npm, ['install', '--production'], {
-            cwd: CORE_DIR, stdio: 'inherit',
-            env: { ...process.env, NODE_ENV: 'production' },
+            cwd: CORE_DIR, stdio: 'inherit', env: process.env,
         });
     }
     if (result.status !== 0) {
-        console.warn('[BOTIFY-X] ⚠️  npm install failed — bot may crash on missing modules.');
+        console.warn('[BOTIFY-X] ⚠️  npm install exited with errors — some features may not work.');
     } else {
-        console.log('[BOTIFY-X] ✅ npm install complete.');
+        console.log('[BOTIFY-X] ✅ Dependencies installed.');
     }
 }
 
@@ -310,7 +304,7 @@ function launch() {
             console.error('[BOTIFY-X] ❌ All download methods failed. Cannot continue.');
             process.exit(1);
         }
-        runNpmInstallIfNeeded();
+        runNpmInstall();
     } else {
         // Step 2: check for updates on every restart
         await checkAndUpdate();
