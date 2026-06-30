@@ -20,7 +20,9 @@ const http   = require('http');
 const AdmZip = require('adm-zip');
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
-const CORE_DIR = path.resolve(__dirname, '..', 'core');
+// Core lives INSIDE the bootstrap dir so paths are always writable on any platform.
+// On Railway: /app/index.js → __dirname = /app → core at /app/core  ✓
+const CORE_DIR = path.resolve(__dirname, 'core');
 const ENTRY    = path.join(CORE_DIR, 'botify.js');
 const CORE_PKG = path.join(CORE_DIR, 'package.json');
 
@@ -223,15 +225,30 @@ async function checkAndUpdate() {
 // ─── npm install helper (first-time setup) ────────────────────────────────────
 function runNpmInstall() {
     console.log('[BOTIFY-X] Installing core dependencies…');
-    const result = spawnSync(
-        process.platform === 'win32' ? 'npm.cmd' : 'npm',
-        ['install', '--omit=dev'],
-        { cwd: CORE_DIR, stdio: 'inherit' }
-    );
+    console.log(`[BOTIFY-X] Core dir: ${CORE_DIR}`);
+
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+    // Try --omit=dev first (npm 7+), fall back to --production (npm 6)
+    let result = spawnSync(npm, ['install', '--omit=dev'], {
+        cwd:   CORE_DIR,
+        stdio: 'inherit',
+        env:   { ...process.env, NODE_ENV: 'production' },
+    });
+
     if (result.status !== 0) {
-        console.warn('[BOTIFY-X] ⚠️  npm install exited with errors.');
+        console.warn('[BOTIFY-X] ⚠️  npm install --omit=dev failed, retrying with --production…');
+        result = spawnSync(npm, ['install', '--production'], {
+            cwd:   CORE_DIR,
+            stdio: 'inherit',
+            env:   { ...process.env, NODE_ENV: 'production' },
+        });
+    }
+
+    if (result.status !== 0) {
+        console.warn('[BOTIFY-X] ⚠️  npm install failed. Bot may crash — check core/package.json.');
     } else {
-        console.log('[BOTIFY-X] ✅ Dependencies installed.');
+        console.log('[BOTIFY-X] ✅ Dependencies installed successfully.');
     }
 }
 
