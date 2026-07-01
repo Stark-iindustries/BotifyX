@@ -219,6 +219,7 @@ function launch() {
         await runNpmInstall();
     } else {
         await checkAndUpdate();
+        await runNpmInstall(); // always verify deps even on existing core
     }
 
     // Session ID — handled by platform
