@@ -36,6 +36,13 @@ const METHOD3_BACKUP_GITHUB_URL = 'YOUR_URL_HERE';
 // ─── GitHub repo for update version checks ────────────────────────────────────
 const GITHUB_REPO = 'Stark-iindustries/Core-botifyX';
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
+const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
+const red    = (t) => `\x1b[31m${t}\x1b[0m`;
+const green  = (t) => `\x1b[32m${t}\x1b[0m`;
+const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
+
 // ─── Platform detection ───────────────────────────────────────────────────────
 function detectPlatform() {
     const env = process.env;
@@ -53,17 +60,16 @@ function detectPlatform() {
 
 // ─── Banner ───────────────────────────────────────────────────────────────────
 function banner() {
-    const c = (t, code) => `\x1b[${code}m${t}\x1b[0m`;
     console.log('');
-    console.log(c('  ██████╗  ██████╗ ████████╗██╗███████╗██╗   ██╗    ██╗  ██╗', '36'));
-    console.log(c('  ██╔══██╗██╔═══██╗╚══██╔══╝██║██╔════╝╚██╗ ██╔╝    ╚██╗██╔╝', '36'));
-    console.log(c('  ██████╔╝██║   ██║   ██║   ██║█████╗   ╚████╔╝      ╚███╔╝ ', '36'));
-    console.log(c('  ██╔══██╗██║   ██║   ██║   ██║██╔══╝    ╚██╔╝       ██╔██╗ ', '36'));
-    console.log(c('  ██████╔╝╚██████╔╝   ██║   ██║██║        ██║        ██╔╝ ██╗', '36'));
-    console.log(c('  ╚═════╝  ╚═════╝    ╚═╝   ╚═╝╚═╝        ╚═╝        ╚═╝  ╚═╝', '36'));
+    console.log(cyan('  ██████╗  ██████╗ ████████╗██╗███████╗██╗   ██╗    ██╗  ██╗'));
+    console.log(cyan('  ██╔══██╗██╔═══██╗╚══██╔══╝██║██╔════╝╚██╗ ██╔╝    ╚██╗██╔╝'));
+    console.log(cyan('  ██████╔╝██║   ██║   ██║   ██║█████╗   ╚████╔╝      ╚███╔╝ '));
+    console.log(cyan('  ██╔══██╗██║   ██║   ██║   ██║██╔══╝    ╚██╔╝       ██╔██╗ '));
+    console.log(cyan('  ██████╔╝╚██████╔╝   ██║   ██║██║        ██║        ██╔╝ ██╗'));
+    console.log(cyan('  ╚═════╝  ╚═════╝    ╚═╝   ╚═╝╚═╝        ╚═╝        ╚═╝  ╚═╝'));
     console.log('');
-    console.log(c(`  [BOTIFY-X] Platform : ${detectPlatform()}`, '36'));
-    console.log(c(`  [BOTIFY-X] Node.js  : ${process.version}`, '36'));
+    console.log(cyan(`  [BOTIFY-X] Platform : ${detectPlatform()}`));
+    console.log(cyan(`  [BOTIFY-X] Node.js  : ${process.version}`));
     console.log('');
 }
 
@@ -90,9 +96,10 @@ function downloadBuffer(url, redirects = 0) {
 }
 
 // ─── Extract zip into CORE_DIR ────────────────────────────────────────────────
-function extractZip(buffer) {
-    const cyan  = (t) => `\x1b[36m${t}\x1b[0m`;
+async function extractZip(buffer) {
     console.log(cyan('[BOTIFY-X] Processing...'));
+    await sleep(2000);
+
     const zip     = new AdmZip(buffer);
     const entries = zip.getEntries();
 
@@ -114,33 +121,36 @@ function extractZip(buffer) {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, entry.getData());
     }
+
     console.log(cyan('[BOTIFY-X] Processed successfully.'));
+    await sleep(2000);
 }
 
 // ─── Try all 3 methods in order ───────────────────────────────────────────────
 async function downloadCore() {
-    const cyan  = (t) => `\x1b[36m${t}\x1b[0m`;
-    const red   = (t) => `\x1b[31m${t}\x1b[0m`;
-
     const methods = [
-        { label: 'method 1 from server one', server: 'server one', url: METHOD1_GITHUB_URL },
-        { label: 'method 2 from server one', server: 'server one', url: METHOD2_HOSTED_URL },
-        { label: 'method 3 from server two', server: 'server two', url: METHOD3_BACKUP_GITHUB_URL },
+        { label: 'method 1 from server one', url: METHOD1_GITHUB_URL },
+        { label: 'method 2 from server one', url: METHOD2_HOSTED_URL },
+        { label: 'method 3 from server two', url: METHOD3_BACKUP_GITHUB_URL },
     ];
 
     for (const { label, url } of methods) {
         if (!url || url === 'YOUR_URL_HERE') {
             console.warn(red(`[BOTIFY-X] ⚠️  ${label} — URL not configured, skipping.`));
+            await sleep(2000);
             continue;
         }
         try {
             console.log(cyan(`[BOTIFY-X] Trying ${label}...`));
             const buffer = await downloadBuffer(url);
+            await sleep(2000);
             console.log(cyan(`[BOTIFY-X] Successfully connected via ${label}`));
-            extractZip(buffer);
+            await sleep(2000);
+            await extractZip(buffer);
             return true;
         } catch (err) {
             console.error(red(`[BOTIFY-X] ❌ ${label} failed: ${err.message}`));
+            await sleep(2000);
         }
     }
     return false;
@@ -160,10 +170,6 @@ function isNewer(latestStr, currentStr) {
 
 // ─── Check GitHub for a newer version ────────────────────────────────────────
 async function checkAndUpdate() {
-    const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
-    const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
-    const red    = (t) => `\x1b[31m${t}\x1b[0m`;
-
     if (!GITHUB_REPO || GITHUB_REPO === 'YOUR_GITHUB_USERNAME/YOUR_REPO_NAME') {
         console.log(cyan('[BOTIFY-X] ℹ️  GITHUB_REPO not set — update check skipped.'));
         return;
@@ -201,18 +207,7 @@ async function checkAndUpdate() {
             return;
         }
 
-        console.log(cyan('[BOTIFY-X] Installing dependencies using npm...'));
-        const result = spawnSync(
-            process.platform === 'win32' ? 'npm.cmd' : 'npm',
-            ['install', '--omit=dev'],
-            { cwd: CORE_DIR, stdio: 'inherit' }
-        );
-        if (result.status !== 0) {
-            console.warn(yellow('[BOTIFY-X] ⚠️  npm install exited with errors — continuing anyway.'));
-        } else {
-            console.log(cyan('[BOTIFY-X] Dependencies installed successfully.'));
-        }
-
+        await runNpmInstall();
         console.log(cyan(`[BOTIFY-X] ✅ Updated to v${latest} successfully.`));
     } catch (err) {
         console.error(`[BOTIFY-X] ⚠️  Update check error: ${err.message} — continuing with current version.`);
@@ -220,17 +215,19 @@ async function checkAndUpdate() {
 }
 
 // ─── npm install helper ────────────────────────────────────────────────────────
-function runNpmInstall() {
-    const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
-    const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
+// Checks for a key dependency (pino) — if missing, always runs npm install
+// even if node_modules/ exists, to handle partial or stale installs.
+async function runNpmInstall() {
+    const pinoDir = path.join(CORE_DIR, 'node_modules', 'pino');
 
-    const nmDir = path.join(CORE_DIR, 'node_modules');
-    if (fs.existsSync(nmDir)) {
-        console.log(cyan('[BOTIFY-X] node_modules already present — skipping install.'));
+    if (fs.existsSync(pinoDir)) {
+        console.log(cyan('[BOTIFY-X] Dependencies already installed — skipping.'));
         return;
     }
 
     console.log(cyan('[BOTIFY-X] Installing dependencies using npm...'));
+    await sleep(2000);
+
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
     let result = spawnSync(npm, ['install', '--omit=dev'], {
@@ -245,6 +242,7 @@ function runNpmInstall() {
         console.warn(yellow('[BOTIFY-X] ⚠️  npm install exited with errors — some features may not work.'));
     } else {
         console.log(cyan('[BOTIFY-X] Dependencies installed successfully.'));
+        await sleep(2000);
     }
 }
 
@@ -252,9 +250,6 @@ function runNpmInstall() {
 let attempts = 0;
 
 function launch() {
-    const cyan = (t) => `\x1b[36m${t}\x1b[0m`;
-    const red  = (t) => `\x1b[31m${t}\x1b[0m`;
-
     if (!fs.existsSync(ENTRY)) {
         console.error(red(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`));
         process.exit(1);
@@ -292,13 +287,14 @@ function launch() {
     banner();
 
     if (!fs.existsSync(ENTRY)) {
-        console.log('\x1b[36m[BOTIFY-X] Core not found locally. Downloading…\x1b[0m');
+        console.log(cyan('[BOTIFY-X] Core not found locally. Downloading…'));
+        await sleep(2000);
         const ok = await downloadCore();
         if (!ok) {
-            console.error('\x1b[31m[BOTIFY-X] ❌ All download methods failed. Cannot continue.\x1b[0m');
+            console.error(red('[BOTIFY-X] ❌ All download methods failed. Cannot continue.'));
             process.exit(1);
         }
-        runNpmInstall();
+        await runNpmInstall();
     } else {
         await checkAndUpdate();
     }
