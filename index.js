@@ -2,11 +2,11 @@
 
 /**
  * BOTIFY-X Bootstrap
- * 1. Detects platform and loads its handler from platforms/
+ * 1. Detects platform, loads its handler from platforms/
  * 2. Downloads core if not present (3 fallback methods)
  * 3. Checks GitHub for newer version — updates if found
- * 4. Handles SESSION_ID per platform (console prompt or env-var instructions)
- * 5. Spawns botify.js with auto-restart on crash
+ * 4. Loads core/.env into process.env so child inherits saved session ID
+ * 5. Spawns botify.js (which handles session prompt itself) with auto-restart
  */
 
 const { spawn, spawnSync } = require('child_process');
@@ -48,28 +48,14 @@ function detectPlatform() {
     return 'Local';
 }
 
-function loadPlatform(name) {
-    const map = {
-        'Railway':     'platforms/railway.js',
-        'Heroku':      'platforms/heroku.js',
-        'Render':      'platforms/render.js',
-        'Koyeb':       'platforms/koyeb.js',
-        'Fly.io':      'platforms/flyio.js',
-        'Pterodactyl': 'platforms/pterodactyl.js',
-        'Termux':      'platforms/termux.js',
-        'Local':       'platforms/local.js',
-    };
-    return require(path.join(__dirname, map[name] || 'platforms/local.js'));
-}
-
 async function banner(platformName) {
     console.log('');
-    console.log(cyan('  ██████╗  ██████╗ ████████╗██╗███████╗██╗   ██╗    ██╗  ██╗'));
-    console.log(cyan('  ██╔══██╗██╔═══██╗╚══██╔══╝██║██╔════╝╚██╗ ██╔╝    ╚██╗██╔╝'));
-    console.log(cyan('  ██████╔╝██║   ██║   ██║   ██║█████╗   ╚████╔╝      ╚███╔╝ '));
-    console.log(cyan('  ██╔══██╗██║   ██║   ██║   ██║██╔══╝    ╚██╔╝       ██╔██╗ '));
-    console.log(cyan('  ██████╔╝╚██████╔╝   ██║   ██║██║        ██║        ██╔╝ ██╗'));
-    console.log(cyan('  ╚═════╝  ╚═════╝    ╚═╝   ╚═╝╚═╝        ╚═╝        ╚═╝  ╚═╝'));
+    console.log(cyan('  \u2588\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557   \u2588\u2588\u2557    \u2588\u2588\u2557  \u2588\u2588\u2557'));
+    console.log(cyan('  \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u255a\u2550\u2550\u2588\u2588\u2554\u2550\u2550\u255d\u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u255a\u2588\u2588\u2557 \u2588\u2588\u2554\u255d    \u255a\u2588\u2588\u2557\u2588\u2588\u2554\u255d'));
+    console.log(cyan('  \u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551   \u2588\u2588\u2551   \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557   \u255a\u2588\u2588\u2588\u2588\u2554\u255d      \u255a\u2588\u2588\u2588\u2554\u255d '));
+    console.log(cyan('  \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2551   \u2588\u2588\u2551   \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255d    \u255a\u2588\u2588\u2554\u255d       \u2588\u2588\u2554\u2588\u2588\u2557 '));
+    console.log(cyan('  \u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d   \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551        \u2588\u2588\u2551        \u2588\u2588\u2554\u255d \u2588\u2588\u2557'));
+    console.log(cyan('  \u255a\u2550\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u2550\u255d    \u255a\u2550\u255d   \u255a\u2550\u255d\u255a\u2550\u255d        \u255a\u2550\u255d        \u255a\u2550\u255d  \u255a\u2550\u255d'));
     console.log('');
     await sleep(2000);
     console.log(cyan(`  [BOTIFY-X] Platform : ${platformName}`));
@@ -129,7 +115,7 @@ async function downloadCore() {
     ];
     for (const { label, url } of methods) {
         if (!url || url === 'YOUR_URL_HERE') {
-            console.warn(red(`[BOTIFY-X] ⚠️  ${label} — URL not configured, skipping.`));
+            console.warn(red(`[BOTIFY-X] \u26a0\ufe0f  ${label} \u2014 URL not configured, skipping.`));
             await sleep(2000);
             continue;
         }
@@ -142,7 +128,7 @@ async function downloadCore() {
             await extractZip(buffer);
             return true;
         } catch (err) {
-            console.error(red(`[BOTIFY-X] ❌ ${label} failed: ${err.message}`));
+            console.error(red(`[BOTIFY-X] \u274c ${label} failed: ${err.message}`));
             await sleep(2000);
         }
     }
@@ -159,46 +145,46 @@ function isNewer(l, c) {
 async function checkAndUpdate() {
     let cur = '0.0.0';
     try { cur = JSON.parse(fs.readFileSync(CORE_PKG,'utf8')).version || '0.0.0'; } catch(_){}
-    console.log(cyan(`[BOTIFY-X] Checking for updates (current: v${cur})…`));
+    console.log(cyan(`[BOTIFY-X] Checking for updates (current: v${cur})\u2026`));
     await sleep(2000);
     try {
         const buf     = await downloadBuffer(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
         const release = JSON.parse(buf.toString('utf8'));
         const latest  = (release.tag_name||'').replace(/^v/,'');
-        if (!latest) { console.log(cyan('[BOTIFY-X] ℹ️  No release found — skipping.')); return; }
-        if (!isNewer(latest, cur)) { console.log(cyan(`[BOTIFY-X] ✅ Already on latest (v${cur}).`)); return; }
-        console.log(yellow(`[BOTIFY-X] 🆙 New version v${latest} available. Updating…`));
+        if (!latest) { console.log(cyan('[BOTIFY-X] \u2139\ufe0f  No release found \u2014 skipping.')); return; }
+        if (!isNewer(latest, cur)) { console.log(cyan(`[BOTIFY-X] \u2705 Already on latest (v${cur}).`)); return; }
+        console.log(yellow(`[BOTIFY-X] \uD83C\uDD99 New version v${latest} available. Updating\u2026`));
         const ok = await downloadCore();
-        if (!ok) { console.error(red('[BOTIFY-X] ❌ Update failed — running existing.')); return; }
+        if (!ok) { console.error(red('[BOTIFY-X] \u274c Update failed \u2014 running existing.')); return; }
         await runNpmInstall();
-        console.log(cyan(`[BOTIFY-X] ✅ Updated to v${latest}.`));
+        console.log(cyan(`[BOTIFY-X] \u2705 Updated to v${latest}.`));
     } catch (err) {
-        console.error(`[BOTIFY-X] ⚠️  Update check error: ${err.message} — continuing.`);
+        console.error(`[BOTIFY-X] \u26a0\ufe0f  Update check error: ${err.message} \u2014 continuing.`);
     }
 }
 
 async function runNpmInstall() {
     const pinoDir = path.join(CORE_DIR, 'node_modules', 'pino');
-    if (fs.existsSync(pinoDir)) { console.log(cyan('[BOTIFY-X] Dependencies already installed — skipping.')); return; }
+    if (fs.existsSync(pinoDir)) { console.log(cyan('[BOTIFY-X] Dependencies already installed \u2014 skipping.')); return; }
     console.log(cyan('[BOTIFY-X] Installing dependencies using npm...'));
     await sleep(2000);
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     let r = spawnSync(npm, ['install', '--omit=dev'], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
     if (r.status !== 0) r = spawnSync(npm, ['install', '--production'], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
-    if (r.status !== 0) console.warn(yellow('[BOTIFY-X] ⚠️  npm install had errors — some features may not work.'));
+    if (r.status !== 0) console.warn(yellow('[BOTIFY-X] \u26a0\ufe0f  npm install had errors \u2014 some features may not work.'));
     else { console.log(cyan('[BOTIFY-X] Dependencies installed successfully.')); await sleep(2000); }
 }
 
 let attempts = 0;
 function launch() {
-    if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`)); process.exit(1); }
+    if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] \u274c Entry not found: ${ENTRY}`)); process.exit(1); }
     const child = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
     child.on('exit', (code, signal) => {
         if (code === 0 || signal === 'SIGTERM') { console.log(cyan('[BOTIFY-X] Process exited cleanly.')); process.exit(0); }
         attempts++;
         if (attempts >= MAX_RETRIES) { console.error(red(`[BOTIFY-X] Crashed ${attempts} times. Giving up.`)); process.exit(1); }
         const delay = Math.min(RETRY_DELAY * attempts, 60000);
-        console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay/1000}s…`));
+        console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay/1000}s\u2026`));
         setTimeout(launch, delay);
     });
     process.once('SIGINT',  () => child.kill('SIGINT'));
@@ -207,31 +193,31 @@ function launch() {
 
 (async () => {
     const platformName = detectPlatform();
-    const platform     = loadPlatform(platformName);
-
     await banner(platformName);
 
     if (!fs.existsSync(ENTRY)) {
-        console.log(cyan('[BOTIFY-X] Core not found locally. Downloading…'));
+        console.log(cyan('[BOTIFY-X] Core not found locally. Downloading\u2026'));
         await sleep(2000);
         const ok = await downloadCore();
-        if (!ok) { console.error(red('[BOTIFY-X] ❌ All download methods failed.')); process.exit(1); }
+        if (!ok) { console.error(red('[BOTIFY-X] \u274c All download methods failed.')); process.exit(1); }
         await runNpmInstall();
     } else {
         await checkAndUpdate();
         await runNpmInstall(); // always verify deps even on existing core
     }
 
-    // Session ID — handled by platform
-    if (!platform.getSessionId()) {
-        platform.noSessionMessage();
-        if (platform.supportsConsoleInput) {
-            try { await platform.promptSessionId(ENV_FILE); }
-            catch (e) { console.error(red(`[BOTIFY-X] ❌ Could not read Session ID: ${e.message}`)); process.exit(1); }
-        } else {
-            process.exit(1);
+    // Load any values saved in core/.env (e.g. SESSION_ID from a previous prompt)
+    // into process.env so the child process inherits them without needing a panel variable.
+    if (fs.existsSync(ENV_FILE)) {
+        for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
+            const eq = line.indexOf('=');
+            if (eq < 1) continue;
+            const key = line.slice(0, eq).trim();
+            const val = line.slice(eq + 1).trim();
+            if (key && val && !process.env[key]) process.env[key] = val;
         }
     }
 
+    // Session prompting is handled entirely inside botify.js
     launch();
 })();
