@@ -2,11 +2,15 @@
 
 /**
  * BOTIFY-X Bootstrap
- * 1. Detects platform, loads its handler from platforms/
- * 2. Downloads core if not present (3 fallback methods)
- * 3. Checks GitHub for newer version — updates if found
- * 4. Loads core/.env into process.env so child inherits saved session ID
- * 5. Spawns botify.js (which handles session prompt itself) with auto-restart
+ *
+ * SESSION_ID priority:
+ *   1. process.env.SESSION_ID  (panel variable — Railway, Koyeb, etc.)
+ *   2. .env in THIS directory  (user fills it in before starting, or we save it here)
+ *   3. core/.env               (saved by botify.js from a previous interactive run)
+ *   4. Interactive console prompt (fallback — may fail on some panel environments)
+ *
+ * On Katabump / Pterodactyl: fill SESSION_ID= in the .env file that ships with
+ * this bootstrap. No console prompt needed, no stdin crash.
  */
 
 const { spawn, spawnSync } = require('child_process');
@@ -16,10 +20,15 @@ const https  = require('https');
 const http   = require('http');
 const AdmZip = require('adm-zip');
 
-const CORE_DIR = path.resolve(__dirname, 'core');
-const ENTRY    = path.join(CORE_DIR, 'botify.js');
-const CORE_PKG = path.join(CORE_DIR, 'package.json');
-const ENV_FILE = path.join(CORE_DIR, '.env');
+const BOOTSTRAP_DIR = __dirname;
+const CORE_DIR      = path.resolve(BOOTSTRAP_DIR, 'core');
+const ENTRY         = path.join(CORE_DIR, 'botify.js');
+const CORE_PKG      = path.join(CORE_DIR, 'package.json');
+
+// .env in the bootstrap folder (ships with the zip, user fills it in)
+const BOOTSTRAP_ENV = path.join(BOOTSTRAP_DIR, '.env');
+// .env inside core (written by botify.js when session ID is entered interactively)
+const CORE_ENV      = path.join(CORE_DIR, '.env');
 
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || '5000', 10);
@@ -32,18 +41,46 @@ const GITHUB_REPO               = 'Stark-iindustries/Core-botifyX';
 const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
 const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
 const red    = (t) => `\x1b[31m${t}\x1b[0m`;
+const green  = (t) => `\x1b[32m${t}\x1b[0m`;
 const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ── Load a .env file into process.env (does NOT overwrite already-set vars) ──
+function loadEnvFile(filePath) {
+    if (!fs.existsSync(filePath)) return;
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const eq  = line.indexOf('=');
+        if (eq < 1) continue;
+        const key = line.slice(0, eq).trim();
+        const val = line.slice(eq + 1).trim();
+        if (key && val && !process.env[key]) process.env[key] = val;
+    }
+}
+
+// ── Write a key=value line into the bootstrap .env ───────────────────────────
+function writeBootstrapEnvKey(key, value) {
+    let lines = fs.existsSync(BOOTSTRAP_ENV)
+        ? fs.readFileSync(BOOTSTRAP_ENV, 'utf8').split('\n')
+        : [];
+    const idx  = lines.findIndex(l => l.startsWith(key + '='));
+    const line = `${key}=${value}`;
+    if (idx >= 0) lines[idx] = line;
+    else lines.push(line);
+    fs.writeFileSync(BOOTSTRAP_ENV, lines.join('\n'), 'utf8');
+}
 
 function detectPlatform() {
     const e = process.env;
-    if (e.RAILWAY_SERVICE_ID || e.RAILWAY_STATIC_URL || e.RAILWAY_ENVIRONMENT) return 'Railway';
+    if (e.RAILWAY_SERVICE_ID || e.RAILWAY_STATIC_URL) return 'Railway';
     if (e.DYNO)           return 'Heroku';
     if (e.RENDER)         return 'Render';
     if (e.KOYEB_APP_NAME) return 'Koyeb';
     if (e.FLY_APP_NAME)   return 'Fly.io';
     if (e.P_SERVER_UUID || e.PTERODACTYL_UUID ||
         /pterodactyl|katabump/i.test(e.HOSTNAME || '')) return 'Pterodactyl';
-    if (e.TERMUX_VERSION ||
+    if (e.TERMUX_VERSION  ||
         (e.PREFIX && e.SHELL && e.SHELL.includes('com.termux'))) return 'Termux';
     return 'Local';
 }
@@ -135,22 +172,22 @@ async function downloadCore() {
     return false;
 }
 
-function isNewer(l, c) {
-    const p = s => (s||'0').replace(/^v/,'').split('.').map(n=>parseInt(n,10)||0);
-    const a = p(l), b = p(c);
-    for (let i = 0; i < 3; i++) { if (a[i]>b[i]) return true; if (a[i]<b[i]) return false; }
+function isNewer(latest, current) {
+    const parse = s => (s || '0').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+    const a = parse(latest), b = parse(current);
+    for (let i = 0; i < 3; i++) { if (a[i] > b[i]) return true; if (a[i] < b[i]) return false; }
     return false;
 }
 
 async function checkAndUpdate() {
     let cur = '0.0.0';
-    try { cur = JSON.parse(fs.readFileSync(CORE_PKG,'utf8')).version || '0.0.0'; } catch(_){}
+    try { cur = JSON.parse(fs.readFileSync(CORE_PKG, 'utf8')).version || '0.0.0'; } catch (_) {}
     console.log(cyan(`[BOTIFY-X] Checking for updates (current: v${cur})\u2026`));
     await sleep(2000);
     try {
         const buf     = await downloadBuffer(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
         const release = JSON.parse(buf.toString('utf8'));
-        const latest  = (release.tag_name||'').replace(/^v/,'');
+        const latest  = (release.tag_name || '').replace(/^v/, '');
         if (!latest) { console.log(cyan('[BOTIFY-X] \u2139\ufe0f  No release found \u2014 skipping.')); return; }
         if (!isNewer(latest, cur)) { console.log(cyan(`[BOTIFY-X] \u2705 Already on latest (v${cur}).`)); return; }
         console.log(yellow(`[BOTIFY-X] \uD83C\uDD99 New version v${latest} available. Updating\u2026`));
@@ -175,6 +212,49 @@ async function runNpmInstall() {
     else { console.log(cyan('[BOTIFY-X] Dependencies installed successfully.')); await sleep(2000); }
 }
 
+// ── Interactive prompt (last-resort fallback) ─────────────────────────────────
+// Uses raw fs.readSync on FD 0 — bypasses Node stream events entirely.
+function promptSessionIdSync() {
+    process.stdout.write(red('\n[BOTIFY-X] SESSION_ID not found in .env file.\n'));
+    process.stdout.write(cyan('[BOTIFY-X] Tip: edit the .env file in this folder and add:\n'));
+    process.stdout.write(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>\n\n'));
+    process.stdout.write(cyan('[BOTIFY-X] Or paste it here now:\n'));
+    process.stdout.write('Paste Session ID \u2192 ');
+
+    while (true) {
+        const buf = Buffer.allocUnsafe(4096);
+        let n;
+        try { n = fs.readSync(0, buf, 0, 4096, null); } catch (_) { n = 0; }
+        if (!n) {
+            console.error(red('\n[BOTIFY-X] \u274c stdin is not available on this platform.'));
+            console.error(cyan('[BOTIFY-X] Edit the .env file next to index.js and add:'));
+            console.error(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>'));
+            console.error(cyan('[BOTIFY-X] Then restart.'));
+            process.exit(1);
+        }
+
+        const id = buf.slice(0, n).toString('utf8').split('\n')[0].trim();
+
+        if (!id) {
+            process.stdout.write(red('[BOTIFY-X] Nothing entered. Try again.\n'));
+            process.stdout.write('Paste Session ID \u2192 ');
+            continue;
+        }
+
+        if (!id.startsWith('BOTIFY-X=') && !id.startsWith('MEGA-')) {
+            process.stdout.write(red('[BOTIFY-X] \u274c Invalid format. Must start with BOTIFY-X= or MEGA-\n'));
+            process.stdout.write('Paste Session ID \u2192 ');
+            continue;
+        }
+
+        // Save to bootstrap .env so next restart skips this prompt
+        writeBootstrapEnvKey('SESSION_ID', id);
+        process.env.SESSION_ID = id;
+        process.stdout.write(green('[BOTIFY-X] \u2705 Session ID saved to .env — future restarts will skip this prompt.\n\n'));
+        return;
+    }
+}
+
 let attempts = 0;
 function launch() {
     if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] \u274c Entry not found: ${ENTRY}`)); process.exit(1); }
@@ -184,7 +264,7 @@ function launch() {
         attempts++;
         if (attempts >= MAX_RETRIES) { console.error(red(`[BOTIFY-X] Crashed ${attempts} times. Giving up.`)); process.exit(1); }
         const delay = Math.min(RETRY_DELAY * attempts, 60000);
-        console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay/1000}s\u2026`));
+        console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay / 1000}s\u2026`));
         setTimeout(launch, delay);
     });
     process.once('SIGINT',  () => child.kill('SIGINT'));
@@ -195,6 +275,7 @@ function launch() {
     const platformName = detectPlatform();
     await banner(platformName);
 
+    // ── Download / update core ─────────────────────────────────────────────────
     if (!fs.existsSync(ENTRY)) {
         console.log(cyan('[BOTIFY-X] Core not found locally. Downloading\u2026'));
         await sleep(2000);
@@ -203,21 +284,34 @@ function launch() {
         await runNpmInstall();
     } else {
         await checkAndUpdate();
-        await runNpmInstall(); // always verify deps even on existing core
+        await runNpmInstall();
     }
 
-    // Load any values saved in core/.env (e.g. SESSION_ID from a previous prompt)
-    // into process.env so the child process inherits them without needing a panel variable.
-    if (fs.existsSync(ENV_FILE)) {
-        for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
-            const eq = line.indexOf('=');
-            if (eq < 1) continue;
-            const key = line.slice(0, eq).trim();
-            const val = line.slice(eq + 1).trim();
-            if (key && val && !process.env[key]) process.env[key] = val;
+    // ── Load SESSION_ID from .env files ────────────────────────────────────────
+    // Priority: panel env var → bootstrap .env → core/.env → interactive prompt
+    loadEnvFile(BOOTSTRAP_ENV);  // bootstrap's own .env (ships with zip)
+    loadEnvFile(CORE_ENV);       // core's .env (saved by botify.js interactive prompt)
+
+    if (!process.env.SESSION_ID) {
+        const isCloudNoConsole = !!(
+            process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_STATIC_URL ||
+            process.env.DYNO || process.env.RENDER ||
+            process.env.KOYEB_APP_NAME || process.env.FLY_APP_NAME
+        );
+
+        if (isCloudNoConsole) {
+            console.error(red('[BOTIFY-X] \u274c SESSION_ID is not set.'));
+            console.error(cyan('[BOTIFY-X] Set it as an environment variable in your hosting panel.'));
+            console.error(cyan('[BOTIFY-X] Format: SESSION_ID=BOTIFY-X=<base64string>'));
+            process.exit(1);
         }
+
+        // Panel / local — try interactive prompt
+        promptSessionIdSync();
+    } else {
+        console.log(cyan('[BOTIFY-X] \u2705 Session ID loaded.'));
+        await sleep(2000);
     }
 
-    // Session prompting is handled entirely inside botify.js
     launch();
 })();
