@@ -36,7 +36,8 @@ const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || '5000', 10);
 const METHOD1_GITHUB_URL        = 'https://github.com/Stark-iindustries/Core-botifyX/archive/refs/heads/main.zip';
 const METHOD2_HOSTED_URL        = 'YOUR_URL_HERE';
 const METHOD3_BACKUP_GITHUB_URL = 'YOUR_URL_HERE';
-const GITHUB_REPO               = 'Stark-iindustries/Core-botifyX';
+const BOOTSTRAP_REPO            = 'Stark-iindustries/BotifyX';
+const BOOTSTRAP_PKG_PATH        = path.join(BOOTSTRAP_DIR, 'package.json');
 
 const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
 const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
@@ -181,20 +182,20 @@ function isNewer(latest, current) {
 
 async function checkAndUpdate() {
     let cur = '0.0.0';
-    try { cur = JSON.parse(fs.readFileSync(CORE_PKG, 'utf8')).version || '0.0.0'; } catch (_) {}
-    console.log(cyan(`[BOTIFY-X] Checking for updates (current: v${cur})\u2026`));
+    try { cur = JSON.parse(fs.readFileSync(BOOTSTRAP_PKG_PATH, 'utf8')).version || '0.0.0'; } catch (_) {}
+    console.log(cyan(`[BOTIFY-X] Checking for updates (bootstrap v${cur})\u2026`));
     await sleep(2000);
     try {
-        const buf     = await downloadBuffer(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
+        const buf     = await downloadBuffer(`https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`);
         const release = JSON.parse(buf.toString('utf8'));
         const latest  = (release.tag_name || '').replace(/^v/, '');
-        if (!latest) { console.log(cyan('[BOTIFY-X] \u2139\ufe0f  No release found \u2014 skipping.')); return; }
-        if (!isNewer(latest, cur)) { console.log(cyan(`[BOTIFY-X] \u2705 Already on latest (v${cur}).`)); return; }
-        console.log(yellow(`[BOTIFY-X] \uD83C\uDD99 New version v${latest} available. Updating\u2026`));
+        if (!latest) { console.log(cyan('[BOTIFY-X] \u2139\ufe0f  No release found \u2014 continuing with current version.')); return; }
+        if (!isNewer(latest, cur)) { console.log(cyan(`[BOTIFY-X] \u2705 Core is up to date.`)); return; }
+        console.log(yellow(`[BOTIFY-X] \uD83C\uDD99 New version v${latest} available. Updating core\u2026`));
         const ok = await downloadCore();
         if (!ok) { console.error(red('[BOTIFY-X] \u274c Update failed \u2014 running existing.')); return; }
         await runNpmInstall();
-        console.log(cyan(`[BOTIFY-X] \u2705 Updated to v${latest}.`));
+        console.log(cyan(`[BOTIFY-X] \u2705 Core updated successfully.`));
     } catch (err) {
         console.error(`[BOTIFY-X] \u26a0\ufe0f  Update check error: ${err.message} \u2014 continuing.`);
     }
