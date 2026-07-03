@@ -34,7 +34,11 @@ const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || '5000', 10);
 const METHOD1_GITHUB_URL        = 'https://github.com/Stark-iindustries/Core-botifyX/archive/refs/heads/main.zip';
 const METHOD2_HOSTED_URL        = 'YOUR_URL_HERE';
 const METHOD3_BACKUP_GITHUB_URL = 'YOUR_URL_HERE';
-const BOOTSTRAP_REPO            = 'Stark-iindustries/BotifyX';
+// NOTE: Core-botifyX has no GitHub Releases — fixes are pushed straight to `main`.
+// So "is there an update?" must be answered by comparing commit SHAs on `main`,
+// not by hitting a releases/latest endpoint (which 404s and silently never
+// triggers a redownload — this was why pushed fixes never reached the bot).
+const CORE_REPO                 = 'Stark-iindustries/Core-botifyX';
 const GITHUB_HEADERS            = { 'User-Agent': 'BotifyX-Bootstrap', 'Accept': 'application/vnd.github+json' };
 
 // Backup paths — shared between applyUpdate and startup restore
@@ -180,20 +184,20 @@ async function downloadCore() {
 }
 
     function isNewer(latest, current) {
-      const parse = s => (s || '0').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
-      const a = parse(latest), b = parse(current);
-      for (let i = 0; i < 3; i++) { if (a[i] > b[i]) return true; if (a[i] < b[i]) return false; }
-      return false;
+      // Core-botifyX ships no version tags — "latest" and "current" are both
+      // commit SHAs on `main`. Any difference means main has moved on.
+      if (!current) return !!latest;
+      return !!latest && latest !== current;
     }
 
-    // ── Fetch latest BotifyX release tag from GitHub ─────────────────────────────
-    async function fetchLatestRelease() {
-      const buf     = await downloadBuffer(
-          `https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`,
+    // ── Fetch latest commit SHA on Core-botifyX's `main` branch ──────────────────
+    async function fetchLatestCoreSha() {
+      const buf    = await downloadBuffer(
+          `https://api.github.com/repos/${CORE_REPO}/commits/main`,
           0, GITHUB_HEADERS
       );
-      const release = JSON.parse(buf.toString('utf8'));
-      return (release.tag_name || '').replace(/^v/, '');
+      const commit = JSON.parse(buf.toString('utf8'));
+      return commit.sha || '';
     }
 
     // ── Backup settings, session and core .env before update ─────────────────────
@@ -257,13 +261,14 @@ async function downloadCore() {
     }
 
     // ── Apply deferred update: kill Core -> backup -> wipe -> download -> restore -
-    async function applyUpdate(latestTag) {
+    async function applyUpdate(latestSha) {
       if (updatingNow) return;
       updatingNow = true;
+      const shortSha = (latestSha || '').slice(0, 7);
       const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
       console.log('');
       console.log(SEP);
-      console.log(cyan(`[BOTIFY-X] ⚡  Applying update now → v${latestTag}`));
+      console.log(cyan(`[BOTIFY-X] ⚡  Applying update now → ${shortSha}`));
       console.log(SEP);
       console.log('');
       await sleep(2000);
@@ -297,8 +302,8 @@ async function downloadCore() {
       }
 
       restoreSettings();
-      writeBootstrapEnvKey('INSTALLED_VERSION', `v${latestTag}`);
-      process.env.INSTALLED_VERSION = `v${latestTag}`;
+      writeBootstrapEnvKey('INSTALLED_CORE_SHA', latestSha);
+      process.env.INSTALLED_CORE_SHA = latestSha;
 
       const newDeps = readDeps(oldPkgPath);
       if (hasNewOrChangedDeps(prevDeps, newDeps)) {
@@ -313,7 +318,7 @@ async function downloadCore() {
 
       console.log('');
       console.log(SEP);
-      console.log(cyan(`[BOTIFY-X] ✅  Update complete — now running v${latestTag}`));
+      console.log(cyan(`[BOTIFY-X] ✅  Update complete — now running ${shortSha}`));
       console.log(SEP);
       console.log('');
 
@@ -328,17 +333,17 @@ async function downloadCore() {
           try { if (currentChild) currentChild.send(payload); } catch (_) {}
       };
       try {
-          const installed = (process.env.INSTALLED_VERSION || '').replace(/^v/, '');
-          const latest    = await fetchLatestRelease();
+          const installed = process.env.INSTALLED_CORE_SHA || '';
+          const latest    = await fetchLatestCoreSha();
           if (!latest) {
-              send({ type: 'updateResult', ok: false, message: 'Could not read latest release info.' });
+              send({ type: 'updateResult', ok: false, message: 'Could not read latest commit info.' });
               return;
           }
           if (!installed || isNewer(latest, installed)) {
-              send({ type: 'updateResult', ok: true, updating: true, latest });
+              send({ type: 'updateResult', ok: true, updating: true, latest: latest.slice(0, 7) });
               await applyUpdate(latest);
           } else {
-              send({ type: 'updateResult', ok: true, updating: false, latest, installed });
+              send({ type: 'updateResult', ok: true, updating: false, latest: latest.slice(0, 7), installed: installed.slice(0, 7) });
           }
       } catch (err) {
           send({ type: 'updateResult', ok: false, message: err.message });
@@ -429,7 +434,7 @@ function promptSessionIdSync() {
       const platformName = detectPlatform();
       await banner(platformName);
 
-      // Load .env early so INSTALLED_VERSION + SESSION_ID are visible
+      // Load .env early so INSTALLED_CORE_SHA + SESSION_ID are visible
       loadEnvFile(BOOTSTRAP_ENV);
       loadEnvFile(CORE_ENV);
 
@@ -440,32 +445,34 @@ function promptSessionIdSync() {
           await sleep(1000);
       }
 
-      // Download Core (first boot) or check for updates (subsequent boots)
-      const installed = (process.env.INSTALLED_VERSION || '').replace(/^v/, '');
+      // Download Core (first boot) or check for updates (subsequent boots).
+      // "Version" here is the installed commit SHA of Core-botifyX's `main`,
+      // since that repo has no release tags.
+      const installed = process.env.INSTALLED_CORE_SHA || '';
 
       if (!fs.existsSync(ENTRY)) {
           // First boot: Core not present locally
           console.log(cyan('[BOTIFY-X] Core not found locally. Downloading...'));
           await sleep(2000);
           let latestFirst = '';
-          try { latestFirst = await fetchLatestRelease(); } catch (_) {}
+          try { latestFirst = await fetchLatestCoreSha(); } catch (_) {}
           const ok = await downloadCore();
           if (!ok) { console.error(red('[BOTIFY-X] ❌ All download methods failed.')); process.exit(1); }
           if (latestFirst) {
-              writeBootstrapEnvKey('INSTALLED_VERSION', `v${latestFirst}`);
-              process.env.INSTALLED_VERSION = `v${latestFirst}`;
+              writeBootstrapEnvKey('INSTALLED_CORE_SHA', latestFirst);
+              process.env.INSTALLED_CORE_SHA = latestFirst;
           }
           await runNpmInstall();
       } else {
-          // Core present: compare installed version vs latest GitHub release
+          // Core present: compare installed commit SHA vs latest commit on main
           try {
               const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
-              const disp = installed ? `v${installed}` : 'unknown';
+              const disp = installed ? installed.slice(0, 7) : 'unknown';
               console.log(cyan(`[BOTIFY-X] Checking for updates (installed: ${disp})...`));
-              const latest = await fetchLatestRelease();
+              const latest = await fetchLatestCoreSha();
 
               if (!latest) {
-                  console.log(cyan('[BOTIFY-X] ℹ️  Could not read release info — continuing.'));
+                  console.log(cyan('[BOTIFY-X] ℹ️  Could not read latest commit info — continuing.'));
               } else if (!installed) {
                   // No record — wipe and re-download to be safe
                   console.log(cyan('[BOTIFY-X] ℹ️  No installed version on record — refreshing Core...'));
@@ -475,22 +482,22 @@ function promptSessionIdSync() {
                   const ok2 = await downloadCore();
                   if (ok2) {
                       restoreSettings();
-                      writeBootstrapEnvKey('INSTALLED_VERSION', `v${latest}`);
-                      process.env.INSTALLED_VERSION = `v${latest}`;
+                      writeBootstrapEnvKey('INSTALLED_CORE_SHA', latest);
+                      process.env.INSTALLED_CORE_SHA = latest;
                       await runNpmInstall(true);
                   }
               } else if (isNewer(latest, installed)) {
                   console.log('');
                   console.log(SEP);
                   console.log(cyan('[BOTIFY-X] 🔔  NEW VERSION AVAILABLE'));
-                  console.log(cyan(`[BOTIFY-X]   Installed : v${installed}`));
-                  console.log(cyan(`[BOTIFY-X]   Latest    : v${latest}`));
+                  console.log(cyan(`[BOTIFY-X]   Installed : ${installed.slice(0, 7)}`));
+                  console.log(cyan(`[BOTIFY-X]   Latest    : ${latest.slice(0, 7)}`));
                   console.log(cyan('[BOTIFY-X]   Applying update immediately...'));
                   console.log(SEP);
                   console.log('');
                   await applyUpdate(latest);
               } else {
-                  console.log(cyan(`[BOTIFY-X] ✅ Up to date (v${installed})`));
+                  console.log(cyan(`[BOTIFY-X] ✅ Up to date (${installed.slice(0, 7)})`));
               }
           } catch (err) {
               console.error(cyan(`[BOTIFY-X] ⚠️  Update check failed: ${err.message} — continuing.`));
