@@ -103,13 +103,13 @@ async function banner(platformName) {
     console.log('');
 }
 
-function downloadBuffer(url, redirects = 0) {
+function downloadBuffer(url, redirects = 0, extraHeaders = {}) {
     if (redirects > 5) return Promise.reject(new Error('Too many redirects'));
     return new Promise((resolve, reject) => {
         const client  = url.startsWith('https') ? https : http;
-        const request = client.get(url, { timeout: 60000 }, (res) => {
+        const request = client.get(url, { timeout: 60000, headers: extraHeaders }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
-                return downloadBuffer(res.headers.location, redirects + 1).then(resolve).catch(reject);
+                return downloadBuffer(res.headers.location, redirects + 1, extraHeaders).then(resolve).catch(reject);
             if (res.statusCode !== 200)
                 return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
             const chunks = [];
@@ -187,7 +187,11 @@ async function checkAndUpdate() {
       console.log(cyan(`[BOTIFY-X] Checking for updates (v${cur})…`));
       await sleep(1500);
       try {
-          const buf     = await downloadBuffer(`https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`);
+          const buf     = await downloadBuffer(
+                `https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`,
+                0,
+                { 'User-Agent': 'BotifyX-Bootstrap', 'Accept': 'application/vnd.github+json' }
+            );
           const release = JSON.parse(buf.toString('utf8'));
           const latest  = (release.tag_name || '').replace(/^v/, '');
           if (!latest) {
