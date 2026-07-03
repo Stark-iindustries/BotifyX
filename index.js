@@ -23,8 +23,6 @@ const AdmZip = require('adm-zip');
 const BOOTSTRAP_DIR = __dirname;
 const CORE_DIR      = path.resolve(BOOTSTRAP_DIR, 'core');
 const ENTRY         = path.join(CORE_DIR, 'botify.js');
-const CORE_PKG      = path.join(CORE_DIR, 'package.json');
-
 // .env in the bootstrap folder (ships with the zip, user fills it in)
 const BOOTSTRAP_ENV = path.join(BOOTSTRAP_DIR, '.env');
 // .env inside core (written by botify.js when session ID is entered interactively)
@@ -37,7 +35,15 @@ const METHOD1_GITHUB_URL        = 'https://github.com/Stark-iindustries/Core-bot
 const METHOD2_HOSTED_URL        = 'YOUR_URL_HERE';
 const METHOD3_BACKUP_GITHUB_URL = 'YOUR_URL_HERE';
 const BOOTSTRAP_REPO            = 'Stark-iindustries/BotifyX';
-const BOOTSTRAP_PKG_PATH        = path.join(BOOTSTRAP_DIR, 'package.json');
+const GITHUB_HEADERS            = { 'User-Agent': 'BotifyX-Bootstrap', 'Accept': 'application/vnd.github+json' };
+
+// Backup paths — shared between applyUpdate and startup restore
+const DB_SRC  = path.join(CORE_DIR,      'src', 'Database', 'database.json');
+const DB_BAK  = path.join(BOOTSTRAP_DIR, '.botify-db-backup.json');
+const ENV_SRC = path.join(CORE_DIR,      '.env');
+const ENV_BAK = path.join(BOOTSTRAP_DIR, '.botify-env-backup');
+const SES_SRC = path.join(CORE_DIR,      'src', 'Session');
+const SES_BAK = path.join(BOOTSTRAP_DIR, '.botify-session-backup');
 
 const cyan   = (t) => `\x1b[36m${t}\x1b[0m`;
 const yellow = (t) => `\x1b[33m${t}\x1b[0m`;
@@ -173,121 +179,128 @@ async function downloadCore() {
     return false;
 }
 
-function isNewer(latest, current) {
-    const parse = s => (s || '0').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
-    const a = parse(latest), b = parse(current);
-    for (let i = 0; i < 3; i++) { if (a[i] > b[i]) return true; if (a[i] < b[i]) return false; }
-    return false;
-}
+    function isNewer(latest, current) {
+      const parse = s => (s || '0').replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+      const a = parse(latest), b = parse(current);
+      for (let i = 0; i < 3; i++) { if (a[i] > b[i]) return true; if (a[i] < b[i]) return false; }
+      return false;
+    }
 
-async function checkAndUpdate() {
-      const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
-      let cur = '0.0.0';
-      try { cur = JSON.parse(fs.readFileSync(BOOTSTRAP_PKG_PATH, 'utf8')).version || '0.0.0'; } catch (_) {}
-      console.log(cyan(`[BOTIFY-X] Checking for updates (v${cur})…`));
-      await sleep(1500);
-      try {
-          const buf     = await downloadBuffer(
-                `https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`,
-                0,
-                { 'User-Agent': 'BotifyX-Bootstrap', 'Accept': 'application/vnd.github+json' }
-            );
-          const release = JSON.parse(buf.toString('utf8'));
-          const latest  = (release.tag_name || '').replace(/^v/, '');
-          if (!latest) {
-              console.log(cyan('[BOTIFY-X] ℹ️  No release found — continuing with current version.'));
-              return;
+    // ── Fetch latest BotifyX release tag from GitHub ─────────────────────────────
+    async function fetchLatestRelease() {
+      const buf     = await downloadBuffer(
+          `https://api.github.com/repos/${BOOTSTRAP_REPO}/releases/latest`,
+          0, GITHUB_HEADERS
+      );
+      const release = JSON.parse(buf.toString('utf8'));
+      return (release.tag_name || '').replace(/^v/, '');
+    }
+
+    // ── Backup settings, session and core .env before update ─────────────────────
+    function backupSettings() {
+      if (fs.existsSync(DB_SRC)) {
+          fs.copyFileSync(DB_SRC, DB_BAK);
+          console.log(cyan('[BOTIFY-X] ✓  Settings backed up'));
+      }
+      if (fs.existsSync(ENV_SRC)) fs.copyFileSync(ENV_SRC, ENV_BAK);
+      if (fs.existsSync(SES_SRC)) {
+          fs.mkdirSync(SES_BAK, { recursive: true });
+          for (const f of fs.readdirSync(SES_SRC)) {
+              const s = path.join(SES_SRC, f);
+              if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(SES_BAK, f));
           }
-          if (!isNewer(latest, cur)) {
-              console.log(cyan(`[BOTIFY-X] ✅ Bot is up to date (v${cur}).`));
-              return;
-          }
-
-          // Premium update banner
-          console.log('');
-          console.log(SEP);
-          console.log(cyan(`[BOTIFY-X]  📦  UPDATE AVAILABLE`));
-          console.log(cyan(`[BOTIFY-X]  Current  :  v${cur}`));
-          console.log(cyan(`[BOTIFY-X]  Latest   :  v${latest}`));
-          console.log(SEP);
-          console.log('');
-          await sleep(1500);
-
-          // Paths for backup
-          const DB_SRC  = path.join(CORE_DIR, 'src', 'Database', 'database.json');
-          const DB_BAK  = path.join(BOOTSTRAP_DIR, '.botify-db-backup.json');
-          const ENV_SRC = path.join(CORE_DIR, '.env');
-          const ENV_BAK = path.join(BOOTSTRAP_DIR, '.botify-env-backup');
-          const SES_SRC = path.join(CORE_DIR, 'src', 'Session');
-          const SES_BAK = path.join(BOOTSTRAP_DIR, '.botify-session-backup');
-
-          // Back up settings, session and env before overwriting core
-          if (fs.existsSync(DB_SRC)) {
-              fs.copyFileSync(DB_SRC, DB_BAK);
-              console.log(cyan('[BOTIFY-X]  ✓  Settings backed up'));
-          }
-          if (fs.existsSync(ENV_SRC)) {
-              fs.copyFileSync(ENV_SRC, ENV_BAK);
-          }
-          if (fs.existsSync(SES_SRC)) {
-              fs.mkdirSync(SES_BAK, { recursive: true });
-              for (const f of fs.readdirSync(SES_SRC)) {
-                  const s = path.join(SES_SRC, f);
-                  if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(SES_BAK, f));
-              }
-              console.log(cyan('[BOTIFY-X]  ✓  Session backed up'));
-          }
-
-          console.log(cyan('[BOTIFY-X]  Downloading latest version…'));
-          await sleep(1000);
-
-          const ok = await downloadCore();
-
-          if (!ok) {
-              console.log('');
-              console.log(SEP);
-              console.error(red('[BOTIFY-X]  ❌  Download failed — continuing with current version (v' + cur + ')'));
-              console.log(cyan('[BOTIFY-X]  ℹ️  Restart the bot to try the update again.'));
-              console.log(SEP);
-              console.log('');
-              return;
-          }
-
-          // Restore settings, session and env after extraction
-          if (fs.existsSync(DB_BAK)) {
-              fs.mkdirSync(path.dirname(DB_SRC), { recursive: true });
-              fs.copyFileSync(DB_BAK, DB_SRC);
-              fs.unlinkSync(DB_BAK);
-              console.log(cyan('[BOTIFY-X]  ✓  Settings restored'));
-          }
-          if (fs.existsSync(ENV_BAK)) {
-              fs.copyFileSync(ENV_BAK, ENV_SRC);
-              fs.unlinkSync(ENV_BAK);
-          }
-          if (fs.existsSync(SES_BAK)) {
-              fs.mkdirSync(SES_SRC, { recursive: true });
-              for (const f of fs.readdirSync(SES_BAK)) {
-                  fs.copyFileSync(path.join(SES_BAK, f), path.join(SES_SRC, f));
-              }
-              fs.rmSync(SES_BAK, { recursive: true, force: true });
-              console.log(cyan('[BOTIFY-X]  ✓  Session restored'));
-          }
-
-          // Install only newly added dependencies
-          await runNpmInstall(true);
-
-          console.log('');
-          console.log(SEP);
-          console.log(cyan(`[BOTIFY-X]  ✅  Update complete — now running v${latest}`));
-          console.log(SEP);
-          console.log('');
-          await sleep(2000);
-
-      } catch (err) {
-          console.error(cyan(`[BOTIFY-X] ⚠️  Update check error: ${err.message} — continuing with current version.`));
+          console.log(cyan('[BOTIFY-X] ✓  Session backed up'));
       }
     }
 
+    // ── Restore settings, session and core .env after update ─────────────────────
+    function restoreSettings() {
+      if (fs.existsSync(DB_BAK)) {
+          fs.mkdirSync(path.dirname(DB_SRC), { recursive: true });
+          fs.copyFileSync(DB_BAK, DB_SRC);
+          fs.unlinkSync(DB_BAK);
+          console.log(cyan('[BOTIFY-X] ✓  Settings restored'));
+      }
+      if (fs.existsSync(ENV_BAK)) {
+          fs.copyFileSync(ENV_BAK, ENV_SRC);
+          fs.unlinkSync(ENV_BAK);
+      }
+      if (fs.existsSync(SES_BAK)) {
+          fs.mkdirSync(SES_SRC, { recursive: true });
+          for (const f of fs.readdirSync(SES_BAK)) {
+              fs.copyFileSync(path.join(SES_BAK, f), path.join(SES_SRC, f));
+          }
+          fs.rmSync(SES_BAK, { recursive: true, force: true });
+          console.log(cyan('[BOTIFY-X] ✓  Session restored'));
+      }
+    }
+
+    // ── State: update orchestration ───────────────────────────────────────────────
+    let updatingNow     = false;
+    let currentChild    = null;
+    let updateScheduled = false;
+
+    // ── Apply deferred update: kill Core -> backup -> wipe -> download -> restore -
+    async function applyUpdate(latestTag) {
+      if (updatingNow) return;
+      updatingNow = true;
+      const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
+      console.log('');
+      console.log(SEP);
+      console.log(cyan(`[BOTIFY-X] ⏰  3-hour timer elapsed — applying update → v${latestTag}`));
+      console.log(SEP);
+      console.log('');
+      await sleep(2000);
+
+      if (currentChild) {
+          console.log(cyan('[BOTIFY-X] Stopping current Core...'));
+          currentChild.kill('SIGTERM');
+          await sleep(3000);
+      }
+
+      backupSettings();
+
+      if (fs.existsSync(CORE_DIR)) {
+          fs.rmSync(CORE_DIR, { recursive: true, force: true });
+          console.log(cyan('[BOTIFY-X] ✓  Old Core wiped'));
+      }
+
+      console.log(cyan('[BOTIFY-X] Downloading latest Core...'));
+      const ok = await downloadCore();
+      if (!ok) {
+          console.error(red('[BOTIFY-X] ❌  Download failed.'));
+          console.error(red('[BOTIFY-X]    Settings backup preserved. Restart the bot to retry.'));
+          updatingNow = false;
+          process.exit(1);
+          return;
+      }
+
+      restoreSettings();
+      writeBootstrapEnvKey('INSTALLED_VERSION', `v${latestTag}`);
+      process.env.INSTALLED_VERSION = `v${latestTag}`;
+      await runNpmInstall(true);
+
+      console.log('');
+      console.log(SEP);
+      console.log(cyan(`[BOTIFY-X] ✅  Update complete — now running v${latestTag}`));
+      console.log(SEP);
+      console.log('');
+      await sleep(2000);
+
+      updatingNow     = false;
+      updateScheduled = false;
+      launch();
+    }
+
+    // ── Schedule the 3-hour deferred update ──────────────────────────────────────
+    function scheduleUpdate(latestTag) {
+      if (updateScheduled) return;
+      updateScheduled = true;
+      const THREE_HOURS = 3 * 60 * 60 * 1000;
+      console.log(cyan(`[BOTIFY-X] ⏳  Auto-update to v${latestTag} will apply in 3 hours`));
+      setTimeout(() => applyUpdate(latestTag), THREE_HOURS);
+    }
+    
 async function runNpmInstall(force = false) {
       const pinoDir = path.join(CORE_DIR, 'node_modules', 'pino');
       if (!force && fs.existsSync(pinoDir)) { console.log(cyan('[BOTIFY-X] Dependencies already installed — skipping.')); return; }
@@ -344,63 +357,116 @@ function promptSessionIdSync() {
     }
 }
 
-let attempts = 0;
-function launch() {
-    if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] \u274c Entry not found: ${ENTRY}`)); process.exit(1); }
-    const child = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
-    child.on('exit', (code, signal) => {
-        if (code === 0 || signal === 'SIGTERM') { console.log(cyan('[BOTIFY-X] Process exited cleanly.')); process.exit(0); }
-        attempts++;
-        if (attempts >= MAX_RETRIES) { console.error(red(`[BOTIFY-X] Crashed ${attempts} times. Giving up.`)); process.exit(1); }
-        const delay = Math.min(RETRY_DELAY * attempts, 60000);
-        console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay / 1000}s\u2026`));
-        setTimeout(launch, delay);
-    });
-    process.once('SIGINT',  () => child.kill('SIGINT'));
-    process.once('SIGTERM', () => child.kill('SIGTERM'));
-}
-
-(async () => {
-    const platformName = detectPlatform();
-    await banner(platformName);
-
-    // ── Download / update core ─────────────────────────────────────────────────
-    if (!fs.existsSync(ENTRY)) {
-        console.log(cyan('[BOTIFY-X] Core not found locally. Downloading\u2026'));
-        await sleep(2000);
-        const ok = await downloadCore();
-        if (!ok) { console.error(red('[BOTIFY-X] \u274c All download methods failed.')); process.exit(1); }
-        await runNpmInstall();
-    } else {
-        await checkAndUpdate();
-        await runNpmInstall();
+    let attempts = 0;
+    function launch() {
+      attempts = 0;
+      if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`)); process.exit(1); }
+      currentChild = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
+      currentChild.on('exit', (code, signal) => {
+          currentChild = null;
+          if (updatingNow) return; // killed by applyUpdate — it will call launch() when ready
+          if (code === 0 || signal === 'SIGTERM') { console.log(cyan('[BOTIFY-X] Process exited cleanly.')); process.exit(0); }
+          attempts++;
+          if (attempts >= MAX_RETRIES) { console.error(red(`[BOTIFY-X] Crashed ${attempts} times. Giving up.`)); process.exit(1); }
+          const delay = Math.min(RETRY_DELAY * attempts, 60000);
+          console.log(red(`[BOTIFY-X] Crashed (code=${code}). Restarting in ${delay / 1000}s…`));
+          setTimeout(launch, delay);
+      });
+      process.once('SIGINT',  () => { if (currentChild) currentChild.kill('SIGINT'); });
+      process.once('SIGTERM', () => { if (currentChild) currentChild.kill('SIGTERM'); });
     }
 
-    // ── Load SESSION_ID from .env files ────────────────────────────────────────
-    // Priority: panel env var → bootstrap .env → core/.env → interactive prompt
-    loadEnvFile(BOOTSTRAP_ENV);  // bootstrap's own .env (ships with zip)
-    loadEnvFile(CORE_ENV);       // core's .env (saved by botify.js interactive prompt)
+    (async () => {
+      const platformName = detectPlatform();
+      await banner(platformName);
 
-    if (!process.env.SESSION_ID) {
-        const isCloudNoConsole = !!(
-            process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_STATIC_URL ||
-            process.env.DYNO || process.env.RENDER ||
-            process.env.KOYEB_APP_NAME || process.env.FLY_APP_NAME
-        );
+      // Load .env early so INSTALLED_VERSION + SESSION_ID are visible
+      loadEnvFile(BOOTSTRAP_ENV);
+      loadEnvFile(CORE_ENV);
 
-        if (isCloudNoConsole) {
-            console.error(red('[BOTIFY-X] \u274c SESSION_ID is not set.'));
-            console.error(cyan('[BOTIFY-X] Set it as an environment variable in your hosting panel.'));
-            console.error(cyan('[BOTIFY-X] Format: SESSION_ID=BOTIFY-X=<base64string>'));
-            process.exit(1);
-        }
+      // Restore any leftover backups from a previous failed/interrupted update
+      if (fs.existsSync(DB_BAK) || fs.existsSync(ENV_BAK) || fs.existsSync(SES_BAK)) {
+          console.log(cyan('[BOTIFY-X] ⚠️  Leftover backup detected — restoring from previous update...'));
+          try { restoreSettings(); } catch (e) { console.error(red(`[BOTIFY-X] Restore failed: ${e.message}`)); }
+          await sleep(1000);
+      }
 
-        // Panel / local — try interactive prompt
-        promptSessionIdSync();
-    } else {
-        console.log(cyan('[BOTIFY-X] \u2705 Session ID loaded.'));
-        await sleep(2000);
-    }
+      // Download Core (first boot) or check for updates (subsequent boots)
+      const installed = (process.env.INSTALLED_VERSION || '').replace(/^v/, '');
 
-    launch();
-})();
+      if (!fs.existsSync(ENTRY)) {
+          // First boot: Core not present locally
+          console.log(cyan('[BOTIFY-X] Core not found locally. Downloading...'));
+          await sleep(2000);
+          let latestFirst = '';
+          try { latestFirst = await fetchLatestRelease(); } catch (_) {}
+          const ok = await downloadCore();
+          if (!ok) { console.error(red('[BOTIFY-X] ❌ All download methods failed.')); process.exit(1); }
+          if (latestFirst) {
+              writeBootstrapEnvKey('INSTALLED_VERSION', `v${latestFirst}`);
+              process.env.INSTALLED_VERSION = `v${latestFirst}`;
+          }
+          await runNpmInstall();
+      } else {
+          // Core present: compare installed version vs latest GitHub release
+          try {
+              const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
+              const disp = installed ? `v${installed}` : 'unknown';
+              console.log(cyan(`[BOTIFY-X] Checking for updates (installed: ${disp})...`));
+              const latest = await fetchLatestRelease();
+
+              if (!latest) {
+                  console.log(cyan('[BOTIFY-X] ℹ️  Could not read release info — continuing.'));
+              } else if (!installed) {
+                  // No record — wipe and re-download to be safe
+                  console.log(cyan('[BOTIFY-X] ℹ️  No installed version on record — refreshing Core...'));
+                  await sleep(1000);
+                  backupSettings();
+                  if (fs.existsSync(CORE_DIR)) fs.rmSync(CORE_DIR, { recursive: true, force: true });
+                  const ok2 = await downloadCore();
+                  if (ok2) {
+                      restoreSettings();
+                      writeBootstrapEnvKey('INSTALLED_VERSION', `v${latest}`);
+                      process.env.INSTALLED_VERSION = `v${latest}`;
+                      await runNpmInstall(true);
+                  }
+              } else if (isNewer(latest, installed)) {
+                  console.log('');
+                  console.log(SEP);
+                  console.log(cyan('[BOTIFY-X] 🔔  NEW VERSION AVAILABLE'));
+                  console.log(cyan(`[BOTIFY-X]   Installed : v${installed}`));
+                  console.log(cyan(`[BOTIFY-X]   Latest    : v${latest}`));
+                  console.log(cyan('[BOTIFY-X]   Auto-update will apply in 3 hours'));
+                  console.log(SEP);
+                  console.log('');
+                  scheduleUpdate(latest);
+              } else {
+                  console.log(cyan(`[BOTIFY-X] ✅ Up to date (v${installed})`));
+              }
+          } catch (err) {
+              console.error(cyan(`[BOTIFY-X] ⚠️  Update check failed: ${err.message} — continuing.`));
+          }
+          await runNpmInstall();
+      }
+
+      // SESSION_ID
+      if (!process.env.SESSION_ID) {
+          const isCloudNoConsole = !!(
+              process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_STATIC_URL ||
+              process.env.DYNO || process.env.RENDER ||
+              process.env.KOYEB_APP_NAME || process.env.FLY_APP_NAME
+          );
+          if (isCloudNoConsole) {
+              console.error(red('[BOTIFY-X] ❌ SESSION_ID is not set.'));
+              console.error(cyan('[BOTIFY-X] Set it as an environment variable in your hosting panel.'));
+              console.error(cyan('[BOTIFY-X] Format: SESSION_ID=BOTIFY-X=<base64string>'));
+              process.exit(1);
+          }
+          promptSessionIdSync();
+      } else {
+          console.log(cyan('[BOTIFY-X] ✅ Session ID loaded.'));
+          await sleep(2000);
+      }
+
+      launch();
+    })();
