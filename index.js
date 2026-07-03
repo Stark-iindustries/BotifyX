@@ -247,7 +247,7 @@ async function downloadCore() {
       const SEP = cyan('[BOTIFY-X] ' + '━'.repeat(40));
       console.log('');
       console.log(SEP);
-      console.log(cyan(`[BOTIFY-X] ⏰  3-hour timer elapsed — applying update → v${latestTag}`));
+      console.log(cyan(`[BOTIFY-X] ⚡  Applying update now → v${latestTag}`));
       console.log(SEP);
       console.log('');
       await sleep(2000);
@@ -280,25 +280,41 @@ async function downloadCore() {
       process.env.INSTALLED_VERSION = `v${latestTag}`;
       await runNpmInstall(true);
 
+      // Brief pause between the "updating" phase and the "success" confirmation.
+      await sleep(10000);
+
       console.log('');
       console.log(SEP);
       console.log(cyan(`[BOTIFY-X] ✅  Update complete — now running v${latestTag}`));
       console.log(SEP);
       console.log('');
-      await sleep(2000);
 
       updatingNow     = false;
       updateScheduled = false;
       launch();
     }
 
-    // ── Schedule the 3-hour deferred update ──────────────────────────────────────
-    function scheduleUpdate(latestTag) {
-      if (updateScheduled) return;
-      updateScheduled = true;
-      const THREE_HOURS = 3 * 60 * 60 * 1000;
-      console.log(cyan(`[BOTIFY-X] ⏳  Auto-update to v${latestTag} will apply in 3 hours`));
-      setTimeout(() => applyUpdate(latestTag), THREE_HOURS);
+    // ── Manual update check, triggered via IPC from Core's `.update` command ────
+    async function triggerManualUpdateCheck() {
+      const send = (payload) => {
+          try { if (currentChild) currentChild.send(payload); } catch (_) {}
+      };
+      try {
+          const installed = (process.env.INSTALLED_VERSION || '').replace(/^v/, '');
+          const latest    = await fetchLatestRelease();
+          if (!latest) {
+              send({ type: 'updateResult', ok: false, message: 'Could not read latest release info.' });
+              return;
+          }
+          if (!installed || isNewer(latest, installed)) {
+              send({ type: 'updateResult', ok: true, updating: true, latest });
+              await applyUpdate(latest);
+          } else {
+              send({ type: 'updateResult', ok: true, updating: false, latest, installed });
+          }
+      } catch (err) {
+          send({ type: 'updateResult', ok: false, message: err.message });
+      }
     }
     
 async function runNpmInstall(force = false) {
@@ -361,7 +377,12 @@ function promptSessionIdSync() {
     function launch() {
       attempts = 0;
       if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`)); process.exit(1); }
-      currentChild = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: 'inherit', env: process.env });
+      currentChild = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: process.env });
+      currentChild.on('message', (msg) => {
+          if (msg && msg.type === 'checkUpdate') {
+              triggerManualUpdateCheck().catch(() => {});
+          }
+      });
       currentChild.on('exit', (code, signal) => {
           currentChild = null;
           if (updatingNow) return; // killed by applyUpdate — it will call launch() when ready
@@ -436,10 +457,10 @@ function promptSessionIdSync() {
                   console.log(cyan('[BOTIFY-X] 🔔  NEW VERSION AVAILABLE'));
                   console.log(cyan(`[BOTIFY-X]   Installed : v${installed}`));
                   console.log(cyan(`[BOTIFY-X]   Latest    : v${latest}`));
-                  console.log(cyan('[BOTIFY-X]   Auto-update will apply in 3 hours'));
+                  console.log(cyan('[BOTIFY-X]   Applying update immediately...'));
                   console.log(SEP);
                   console.log('');
-                  scheduleUpdate(latest);
+                  await applyUpdate(latest);
               } else {
                   console.log(cyan(`[BOTIFY-X] ✅ Up to date (v${installed})`));
               }
