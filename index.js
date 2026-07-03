@@ -240,6 +240,22 @@ async function downloadCore() {
     let currentChild    = null;
     let updateScheduled = false;
 
+    // ── Read a package.json's dependency names+versions (empty object if missing) ─
+    function readDeps(pkgPath) {
+      try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          return { ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}) };
+      } catch (_) { return {}; }
+    }
+
+    // ── True if `next` has any package name/version not present in `prev` ────────
+    function hasNewOrChangedDeps(prev, next) {
+      for (const [name, version] of Object.entries(next)) {
+          if (prev[name] !== version) return true;
+      }
+      return false;
+    }
+
     // ── Apply deferred update: kill Core -> backup -> wipe -> download -> restore -
     async function applyUpdate(latestTag) {
       if (updatingNow) return;
@@ -260,6 +276,11 @@ async function downloadCore() {
 
       backupSettings();
 
+      // Snapshot the old package.json's deps before we wipe Core, so we can tell
+      // afterwards whether the update actually added/changed any dependency.
+      const oldPkgPath = path.join(CORE_DIR, 'package.json');
+      const prevDeps   = readDeps(oldPkgPath);
+
       if (fs.existsSync(CORE_DIR)) {
           fs.rmSync(CORE_DIR, { recursive: true, force: true });
           console.log(cyan('[BOTIFY-X] ✓  Old Core wiped'));
@@ -278,7 +299,14 @@ async function downloadCore() {
       restoreSettings();
       writeBootstrapEnvKey('INSTALLED_VERSION', `v${latestTag}`);
       process.env.INSTALLED_VERSION = `v${latestTag}`;
-      await runNpmInstall(true);
+
+      const newDeps = readDeps(oldPkgPath);
+      if (hasNewOrChangedDeps(prevDeps, newDeps)) {
+          console.log(cyan('[BOTIFY-X] New/updated dependencies detected in package.json — installing…'));
+          await runNpmInstall(true);
+      } else {
+          console.log(cyan('[BOTIFY-X] No new dependencies in package.json — skipping npm install.'));
+      }
 
       // Brief pause between the "updating" phase and the "success" confirmation.
       await sleep(10000);
