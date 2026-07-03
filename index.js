@@ -498,24 +498,11 @@ function promptSessionIdSync() {
           await runNpmInstall();
       }
 
-      // SESSION_ID
-      if (!process.env.SESSION_ID) {
-          const isCloudNoConsole = !!(
-              process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_STATIC_URL ||
-              process.env.DYNO || process.env.RENDER ||
-              process.env.KOYEB_APP_NAME || process.env.FLY_APP_NAME
-          );
-          if (isCloudNoConsole) {
-              console.error(red('[BOTIFY-X] ❌ SESSION_ID is not set.'));
-              console.error(cyan('[BOTIFY-X] Set it as an environment variable in your hosting panel.'));
-              console.error(cyan('[BOTIFY-X] Format: SESSION_ID=BOTIFY-X=<base64string>'));
-              process.exit(1);
-          }
-          promptSessionIdSync();
-      } else {
-          console.log(cyan('[BOTIFY-X] ✅ Session ID loaded.'));
-          await sleep(2000);
-      }
-
+      // SESSION_ID: intentionally NOT checked/prompted here. Core (index.js's
+      // child process) already does DB connect + migration + plugin/command
+      // loading BEFORE it checks for SESSION_ID and prompts if missing — so the
+      // console prompt only ever appears once the bot has finished loading
+      // everything else. Prompting here (before Core is even spawned) would
+      // show the prompt with nothing loaded yet, which is the bug we're fixing.
       launch();
     })();
