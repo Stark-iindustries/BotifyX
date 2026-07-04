@@ -256,6 +256,19 @@ async function downloadCore() {
       return false;
     }
 
+    // ── Move a directory, preferring a fast rename and falling back to a
+    // recursive copy+remove if the paths are on different filesystems. ────────────
+    function moveDirSync(src, dest) {
+      if (!fs.existsSync(src)) return;
+      try {
+          fs.rmSync(dest, { recursive: true, force: true });
+          fs.renameSync(src, dest);
+      } catch (_) {
+          fs.cpSync(src, dest, { recursive: true, force: true });
+          fs.rmSync(src, { recursive: true, force: true });
+      }
+    }
+
     // ── Apply deferred update: kill Core -> backup -> wipe -> download -> restore -
     async function applyUpdate(latestTag) {
       if (updatingNow) return;
@@ -281,6 +294,18 @@ async function downloadCore() {
       const oldPkgPath = path.join(CORE_DIR, 'package.json');
       const prevDeps   = readDeps(oldPkgPath);
 
+      // Preserve node_modules across the wipe — only the source code needs a
+      // clean slate, not the already-installed packages. Re-downloading every
+      // dependency on every update is slow/unreliable on constrained
+      // connections, and is only actually needed when package.json's
+      // dependencies changed (checked further below).
+      const NM_DIR = path.join(CORE_DIR, 'node_modules');
+      const NM_BAK = path.join(BOOTSTRAP_DIR, '.botify-node_modules-backup');
+      if (fs.existsSync(NM_DIR)) {
+          moveDirSync(NM_DIR, NM_BAK);
+          console.log(cyan('[BOTIFY-X] ✓  node_modules preserved'));
+      }
+
       if (fs.existsSync(CORE_DIR)) {
           fs.rmSync(CORE_DIR, { recursive: true, force: true });
           console.log(cyan('[BOTIFY-X] ✓  Old Core wiped'));
@@ -297,6 +322,12 @@ async function downloadCore() {
       }
 
       restoreSettings();
+
+      if (fs.existsSync(NM_BAK)) {
+          moveDirSync(NM_BAK, NM_DIR);
+          console.log(cyan('[BOTIFY-X] ✓  node_modules restored'));
+      }
+
       writeBootstrapEnvKey('INSTALLED_VERSION', latestTag);
       process.env.INSTALLED_VERSION = latestTag;
 
@@ -491,6 +522,12 @@ function promptSessionIdSync() {
                   console.log(SEP);
                   console.log('');
                   await applyUpdate(latest);
+                  // applyUpdate() already backs up/wipes/downloads/restores,
+                  // decides whether npm install is needed, and calls launch()
+                  // itself. Falling through here would redundantly re-run
+                  // npm install and spawn a second Core process concurrently
+                  // with the one applyUpdate() already started — return now.
+                  return;
               } else {
                   console.log(cyan(`[BOTIFY-X] ✅ Up to date (${installed.slice(0, 7)})`));
               }
@@ -508,4 +545,5 @@ function promptSessionIdSync() {
       // show the prompt with nothing loaded yet, which is the bug we're fixing.
       launch();
     })();
+
 
