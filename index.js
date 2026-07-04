@@ -331,9 +331,12 @@ async function downloadCore() {
       writeBootstrapEnvKey('INSTALLED_VERSION', latestTag);
       process.env.INSTALLED_VERSION = latestTag;
 
-      const newDeps = readDeps(oldPkgPath);
-      if (hasNewOrChangedDeps(prevDeps, newDeps)) {
-          console.log(cyan('[BOTIFY-X] New/updated dependencies detected in package.json — installing…'));
+      const newDeps  = readDeps(oldPkgPath);
+      const depsChanged = hasNewOrChangedDeps(prevDeps, newDeps);
+      const nmMissing    = !fs.existsSync(path.join(CORE_DIR, 'node_modules', 'pino'));
+      if (depsChanged || nmMissing) {
+          if (depsChanged) console.log(cyan('[BOTIFY-X] New/updated dependencies detected in package.json — installing…'));
+          else console.log(cyan('[BOTIFY-X] node_modules missing/incomplete — installing…'));
           await runNpmInstall(true);
       } else {
           console.log(cyan('[BOTIFY-X] No new dependencies in package.json — skipping npm install.'));
@@ -545,5 +548,6 @@ function promptSessionIdSync() {
       // show the prompt with nothing loaded yet, which is the bug we're fixing.
       launch();
     })();
+
 
 
