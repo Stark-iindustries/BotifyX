@@ -1,7 +1,6 @@
 {
   "name": "BotifyX",
   "description": "BotifyX, your friendly assistant!",
-  "logo": "none",
   "keywords": [],
   "repository": "https://github.com/Stark-iindustries/BotifyX",
   "stack": "heroku-24",
@@ -10,16 +9,13 @@
       "plan": "heroku-postgresql"
     }
   ],
-  "scripts": {
-    "start": "node index.js"
+  "env": {
+    "SESSION_ID": {
+      "description": "Must begin with 'BOTIFYX='",
+      "value": "",
+      "required": true
+    }
   },
-"env": {
-  "SESSION_ID": {
-    "description": "Must begin with 'BOTIFYX='
-    "value": "",
-    "required": false
-  }
-},
   "buildpacks": [
     {
       "url": "heroku/nodejs"
