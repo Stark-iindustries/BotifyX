@@ -20,6 +20,16 @@ const https  = require('https');
 const http   = require('http');
 const AdmZip = require('adm-zip');
 
+// ── Heroku: bind to PORT immediately to satisfy the 60-second boot timeout ──
+// Web dynos are SIGKILL'd if nothing binds to PORT within 60 s.
+// The bot doesn't need HTTP — this is a keep-alive shim only.
+if (process.env.DYNO) {
+    const _port = parseInt(process.env.PORT || '3000', 10);
+    http.createServer((_, res) => res.end('BotifyX is running.')).listen(_port, () => {
+        console.log('[36m[BOTIFY-X] Heroku port ' + _port + ' bound — boot timeout satisfied.[0m');
+    });
+}
+
 const BOOTSTRAP_DIR = __dirname;
 const CORE_DIR      = path.resolve(BOOTSTRAP_DIR, 'core');
 const ENTRY         = path.join(CORE_DIR, 'botify.js');
@@ -380,6 +390,13 @@ async function downloadCore() {
     }
     
 async function runNpmInstall(force = false) {
+      // On Heroku all Core deps are pre-installed at root during slug compile.
+      // Running npm install inside core/ at runtime fails: no git (for the
+      // Baileys GitHub tarball) and no build tools (for native modules).
+      if (process.env.DYNO) {
+          console.log('[36m[BOTIFY-X] Heroku: deps pre-installed at root — skipping core npm install.[0m');
+          return;
+      }
       const pinoDir = path.join(CORE_DIR, 'node_modules', 'pino');
       if (!force && fs.existsSync(pinoDir)) { console.log(cyan('[BOTIFY-X] Dependencies already installed — skipping.')); return; }
       if (force) console.log(cyan('[BOTIFY-X] Checking for new dependencies…'));
@@ -547,6 +564,19 @@ function promptSessionIdSync() {
       // everything else. Prompting here (before Core is even spawned) would
       // show the prompt with nothing loaded yet, which is the bug we're fixing.
       launch();
+
+      // ── Poll GitHub every 10 min — auto-update when a new release is tagged ──
+      setInterval(async () => {
+          if (updatingNow) return;
+          try {
+              const latest    = await fetchLatestRelease();
+              const installed = process.env.INSTALLED_VERSION || '';
+              if (latest && isNewer(latest, installed)) {
+                  console.log(cyan('[BOTIFY-X] 🔔 New release detected: ' + latest + ' — updating now...'));
+                  await applyUpdate(latest);
+              }
+          } catch (_) {}
+      }, 10 * 60 * 1000);
     })();
 
 
