@@ -18,34 +18,15 @@ const path   = require('path');
 const fs     = require('fs');
 const https  = require('https');
 const http   = require('http');
-const net    = require('net');
 const AdmZip = require('adm-zip');
 
 // ── Heroku: bind to PORT immediately to satisfy the 60-second boot timeout ──
-// Web dynos are SIGKILL'd if nothing binds to PORT within 60 s. Core (the
-// child process) can't also bind PORT once we own it, so instead of a dumb
-// keep-alive page this is a raw TCP proxy: until Core's pairing dashboard
-// signals it's ready (via IPC — see launch()), it serves a "starting up"
-// page; once ready, it forwards raw connections to Core's internal port.
-let coreDashboardPort = null;
+// Web dynos are SIGKILL'd if nothing binds to PORT within 60 s.
+// The bot doesn't need HTTP — this is a keep-alive shim only.
 if (process.env.DYNO) {
     const _port = parseInt(process.env.PORT || '3000', 10);
-    const proxy = net.createServer((clientSocket) => {
-        if (coreDashboardPort) {
-            const target = net.connect(coreDashboardPort, '127.0.0.1');
-            clientSocket.pipe(target);
-            target.pipe(clientSocket);
-            target.on('error', () => clientSocket.destroy());
-            clientSocket.on('error', () => target.destroy());
-        } else {
-            clientSocket.end(
-                'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n' +
-                'BotifyX is starting up — refresh in a few seconds.'
-            );
-        }
-    });
-    proxy.listen(_port, () => {
-        console.log('\x1b[36m[BOTIFY-X] Heroku port ' + _port + ' bound (proxy) — boot timeout satisfied.\x1b[0m');
+    http.createServer((_, res) => res.end('BotifyX is running.')).listen(_port, () => {
+        console.log('[36m[BOTIFY-X] Heroku port ' + _port + ' bound — boot timeout satisfied.[0m');
     });
 }
 
@@ -472,39 +453,18 @@ function promptSessionIdSync() {
 }
 
     let attempts = 0;
-    let restartRequested = false; // set when the dashboard's Restart button asks Core to restart
     function launch() {
       attempts = 0;
-      coreDashboardPort = null; // stale from any previous child — will be re-signalled if needed
       if (!fs.existsSync(ENTRY)) { console.error(red(`[BOTIFY-X] ❌ Entry not found: ${ENTRY}`)); process.exit(1); }
       currentChild = spawn(process.execPath, [ENTRY], { cwd: CORE_DIR, stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: process.env });
       currentChild.on('message', (msg) => {
           if (msg && msg.type === 'checkUpdate') {
               triggerManualUpdateCheck().catch(() => {});
           }
-          if (msg && msg.type === 'dashboardReady') {
-              coreDashboardPort = msg.port;
-          }
-          if (msg && msg.type === 'dashboardClosed') {
-              coreDashboardPort = null;
-          }
-          if (msg && msg.type === 'restartRequested') {
-              // Dashboard's Restart button. Kill Core and relaunch immediately —
-              // distinct from a crash, so it skips the normal retry backoff.
-              restartRequested = true;
-              console.log(cyan('[BOTIFY-X] Restart requested from dashboard…'));
-              if (currentChild) currentChild.kill('SIGTERM');
-          }
       });
       currentChild.on('exit', (code, signal) => {
           currentChild = null;
           if (updatingNow) return; // killed by applyUpdate — it will call launch() when ready
-          if (restartRequested) {
-              restartRequested = false;
-              console.log(cyan('[BOTIFY-X] Restarting…'));
-              setTimeout(launch, 1000);
-              return;
-          }
           if (code === 0 || signal === 'SIGTERM') { console.log(cyan('[BOTIFY-X] Process exited cleanly.')); process.exit(0); }
           attempts++;
           if (attempts >= MAX_RETRIES) { console.error(red(`[BOTIFY-X] Crashed ${attempts} times. Giving up.`)); process.exit(1); }
