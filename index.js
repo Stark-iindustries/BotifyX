@@ -409,48 +409,7 @@ async function runNpmInstall(force = false) {
       else { console.log(cyan('[BOTIFY-X] Dependencies ready.')); await sleep(2000); }
     }
 
-// ── Interactive prompt (last-resort fallback) ─────────────────────────────────
-// Uses raw fs.readSync on FD 0 — bypasses Node stream events entirely.
-function promptSessionIdSync() {
-    process.stdout.write(red('\n[BOTIFY-X] SESSION_ID not found in .env file.\n'));
-    process.stdout.write(cyan('[BOTIFY-X] Tip: edit the .env file in this folder and add:\n'));
-    process.stdout.write(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>\n\n'));
-    process.stdout.write(cyan('[BOTIFY-X] Or paste it here now:\n'));
-    process.stdout.write('Paste Session ID \u2192 ');
-
-    while (true) {
-        const buf = Buffer.allocUnsafe(4096);
-        let n;
-        try { n = fs.readSync(0, buf, 0, 4096, null); } catch (_) { n = 0; }
-        if (!n) {
-            console.error(red('\n[BOTIFY-X] \u274c stdin is not available on this platform.'));
-            console.error(cyan('[BOTIFY-X] Edit the .env file next to index.js and add:'));
-            console.error(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>'));
-            console.error(cyan('[BOTIFY-X] Then restart.'));
-            process.exit(1);
-        }
-
-        const id = buf.slice(0, n).toString('utf8').split('\n')[0].trim();
-
-        if (!id) {
-            process.stdout.write(red('[BOTIFY-X] Nothing entered. Try again.\n'));
-            process.stdout.write('Paste Session ID \u2192 ');
-            continue;
-        }
-
-        if (!id.startsWith('BOTIFY-X=') && !id.startsWith('MEGA-')) {
-            process.stdout.write(red('[BOTIFY-X] \u274c Invalid format. Must start with BOTIFY-X= or MEGA-\n'));
-            process.stdout.write('Paste Session ID \u2192 ');
-            continue;
-        }
-
-        // Save to bootstrap .env so next restart skips this prompt
-        writeBootstrapEnvKey('SESSION_ID', id);
-        process.env.SESSION_ID = id;
-        process.stdout.write(green('[BOTIFY-X] \u2705 Session ID saved to .env — future restarts will skip this prompt.\n\n'));
-        return;
-    }
-}
+// ── Interactive prompt (removed) ─────────────────────────────────────────────
 
     let attempts = 0;
     function launch() {
