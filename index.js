@@ -20,16 +20,6 @@ const https  = require('https');
 const http   = require('http');
 const AdmZip = require('adm-zip');
 
-// ── Heroku: bind to PORT immediately to satisfy the 60-second boot timeout ──
-// Web dynos are SIGKILL'd if nothing binds to PORT within 60 s.
-// The bot doesn't need HTTP — this is a keep-alive shim only.
-if (process.env.DYNO) {
-    const _port = parseInt(process.env.PORT || '3000', 10);
-    http.createServer((_, res) => res.end('BotifyX is running.')).listen(_port, () => {
-        console.log('[36m[BOTIFY-X] Heroku port ' + _port + ' bound — boot timeout satisfied.[0m');
-    });
-}
-
 const BOOTSTRAP_DIR = __dirname;
 const CORE_DIR      = path.resolve(BOOTSTRAP_DIR, 'core');
 const ENTRY         = path.join(CORE_DIR, 'botify.js');
@@ -390,13 +380,6 @@ async function downloadCore() {
     }
     
 async function runNpmInstall(force = false) {
-      // On Heroku all Core deps are pre-installed at root during slug compile.
-      // Running npm install inside core/ at runtime fails: no git (for the
-      // Baileys GitHub tarball) and no build tools (for native modules).
-      if (process.env.DYNO) {
-          console.log('[36m[BOTIFY-X] Heroku: deps pre-installed at root — skipping core npm install.[0m');
-          return;
-      }
       const pinoDir = path.join(CORE_DIR, 'node_modules', 'pino');
       if (!force && fs.existsSync(pinoDir)) { console.log(cyan('[BOTIFY-X] Dependencies already installed — skipping.')); return; }
       if (force) console.log(cyan('[BOTIFY-X] Checking for new dependencies…'));
@@ -409,7 +392,48 @@ async function runNpmInstall(force = false) {
       else { console.log(cyan('[BOTIFY-X] Dependencies ready.')); await sleep(2000); }
     }
 
-// ── Interactive prompt (removed) ─────────────────────────────────────────────
+// ── Interactive prompt (last-resort fallback) ─────────────────────────────────
+// Uses raw fs.readSync on FD 0 — bypasses Node stream events entirely.
+function promptSessionIdSync() {
+    process.stdout.write(red('\n[BOTIFY-X] SESSION_ID not found in .env file.\n'));
+    process.stdout.write(cyan('[BOTIFY-X] Tip: edit the .env file in this folder and add:\n'));
+    process.stdout.write(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>\n\n'));
+    process.stdout.write(cyan('[BOTIFY-X] Or paste it here now:\n'));
+    process.stdout.write('Paste Session ID \u2192 ');
+
+    while (true) {
+        const buf = Buffer.allocUnsafe(4096);
+        let n;
+        try { n = fs.readSync(0, buf, 0, 4096, null); } catch (_) { n = 0; }
+        if (!n) {
+            console.error(red('\n[BOTIFY-X] \u274c stdin is not available on this platform.'));
+            console.error(cyan('[BOTIFY-X] Edit the .env file next to index.js and add:'));
+            console.error(cyan('[BOTIFY-X]   SESSION_ID=BOTIFY-X=<your_session_string>'));
+            console.error(cyan('[BOTIFY-X] Then restart.'));
+            process.exit(1);
+        }
+
+        const id = buf.slice(0, n).toString('utf8').split('\n')[0].trim();
+
+        if (!id) {
+            process.stdout.write(red('[BOTIFY-X] Nothing entered. Try again.\n'));
+            process.stdout.write('Paste Session ID \u2192 ');
+            continue;
+        }
+
+        if (!id.startsWith('BOTIFY-X=') && !id.startsWith('MEGA-')) {
+            process.stdout.write(red('[BOTIFY-X] \u274c Invalid format. Must start with BOTIFY-X= or MEGA-\n'));
+            process.stdout.write('Paste Session ID \u2192 ');
+            continue;
+        }
+
+        // Save to bootstrap .env so next restart skips this prompt
+        writeBootstrapEnvKey('SESSION_ID', id);
+        process.env.SESSION_ID = id;
+        process.stdout.write(green('[BOTIFY-X] \u2705 Session ID saved to .env — future restarts will skip this prompt.\n\n'));
+        return;
+    }
+}
 
     let attempts = 0;
     function launch() {
@@ -523,19 +547,6 @@ async function runNpmInstall(force = false) {
       // everything else. Prompting here (before Core is even spawned) would
       // show the prompt with nothing loaded yet, which is the bug we're fixing.
       launch();
-
-      // ── Poll GitHub every 10 min — auto-update when a new release is tagged ──
-      setInterval(async () => {
-          if (updatingNow) return;
-          try {
-              const latest    = await fetchLatestRelease();
-              const installed = process.env.INSTALLED_VERSION || '';
-              if (latest && isNewer(latest, installed)) {
-                  console.log(cyan('[BOTIFY-X] 🔔 New release detected: ' + latest + ' — updating now...'));
-                  await applyUpdate(latest);
-              }
-          } catch (_) {}
-      }, 10 * 60 * 1000);
     })();
 
 
