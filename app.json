@@ -13,7 +13,7 @@
     "SESSION_ID": {
       "description": "Must begin with 'BOTIFYX='",
       "value": "",
-      "required": true
+      "required": false
     }
   },
   "buildpacks": [
